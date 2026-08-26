@@ -130,6 +130,7 @@ module NetCDFOutputModule
         procedure, private  :: initBiota => initBiotaNetCDFOutput
         procedure, private  :: createDimensions => createDimensionsNetCDFOutput
         procedure, private  :: allocateVariables => allocateVariablesNetCDFOutput
+        procedure, private  :: getMaxReaches
         procedure, public   :: newChunk => newChunkNetCDFOutput
         procedure, public   :: finaliseChunk => finaliseChunkNetCDFOutput
         procedure, public   :: close => closeNetCDFOutput
@@ -159,6 +160,10 @@ module NetCDFOutputModule
         
         ! Point the Environment object to that passed in
         me%env%item => env
+
+        ! Size the 'w' (waterbody) dimension to the largest number of reaches in any grid cell.
+        ! This must happen before initFile/allocateVariables, both of which use w_count.
+        me%w_count = me%getMaxReaches()
 
         ! Create a NetCDF file for this chunk
         call me%initFile()
@@ -266,7 +271,7 @@ module NetCDFOutputModule
                     end if
 
                     me%output_water__volume(w,x,y,tInChunk) = reach%volume
-                    me%output_water__depth(w,x,y,tInChunk)  = reach%depth
+                    me%output_water__depth(w,x,y,tInChunk)  = divideCheckZero(reach%volume, reach%bedArea)
                     me%output_water__flow(w,x,y,tInChunk)   = reach%Q%outflow / C%timeStep
 
                 else if (C%netCDFWriteMode == 'itr') then
@@ -307,7 +312,7 @@ module NetCDFOutputModule
                     end if
 
                     call me%nc__water__volume%setData(reach%volume, start=[w,x,y,t])
-                    call me%nc__water__depth%setData(reach%depth,   start=[w,x,y,t])
+                    call me%nc__water__depth%setData(divideCheckZero(reach%volume, reach%bedArea),   start=[w,x,y,t])
                     call me%nc__water__flow%setData(reach%Q%outflow / C%timeStep, start=[w,x,y,t])
                 end if
 
@@ -368,7 +373,7 @@ module NetCDFOutputModule
                 if (r%hasCriticalError()) then
                     call r%addToTrace(tr); call cont%finalise(); call cont_buried%finalise(); return
                 end if
-                select type (data => r%getData())
+                select type (data => r%data)
                     type is (Contaminant); cont = data
                     class default; call cont%finalise(); call cont_buried%finalise(); return
                 end select
@@ -390,7 +395,7 @@ module NetCDFOutputModule
                 if (r%hasCriticalError()) then
                     call r%addToTrace(tr); call cont%finalise(); call cont_buried%finalise(); return
                 end if
-                select type (data => r%getData())
+                select type (data => r%data)
                     type is (Contaminant); cont_buried = data
                     class default; call cont%finalise(); call cont_buried%finalise(); return
                 end select
@@ -401,7 +406,7 @@ module NetCDFOutputModule
                     if (r%hasCriticalError() .or. .not. allocated(r%data)) then
                         call r%addToTrace(tr); call cont%finalise(); call cont_buried%finalise(); return
                     end if
-                    select type (data => r%getData())
+                    select type (data => r%data)
                         type is (Contaminant); layer_cont = data
                         class default; call cont%finalise(); call cont_buried%finalise(); return
                     end select
@@ -1057,19 +1062,9 @@ module NetCDFOutputModule
         nx  = DATASET%gridShape(1)
         ny  = DATASET%gridShape(2)
         nt  = C%batchNTimesteps(k)
-        ! FIX: dynamic 'nw' (was 7)
         nw  = max(1, me%w_count) 
         nls = C%nSoilLayers
         nld = C%nSedimentLayers
-
-        ! ===== DEBUG/SANITY =====
-        if (nt <= 0) then
-            write(*,*) 'allocateVariablesNetCDFOutput: nt <= 0 for chunk k=', k, &
-                    '  C%batchNTimesteps(k)=', nt
-            stop 2
-        end if
-        write(*,*) 'DEBUG allocateVariablesNetCDFOutput: k=', k, ' nx=', nx, ' ny=', ny, ' nt=', nt, ' nw=', nw
-        ! ========================
 
         ! --------------------------
         ! WATER (form, w, x, y, t)

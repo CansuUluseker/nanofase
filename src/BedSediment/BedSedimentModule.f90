@@ -149,7 +149,7 @@ contains
             r = me%m_contaminant(L)%create_from_data( &
                 compartment='sediment', &
                 contaminantDensity=DATASET%contaminantDensity, &
-                soilAttachmentEfficiency=DATASET%soilConstantAttachmentEfficiency, &
+                soilAttachmentEfficiency=DATASET%soilAttachmentEfficiencyConstant, &
                 riverAttachmentEfficiency=DATASET%riverAttachmentEfficiency, &
                 estuaryAttachmentEfficiency=DATASET%estuaryAttachmentEfficiency, &
                 k_diss_pristine=DATASET%contaminant_k_diss_pristine, &
@@ -562,6 +562,9 @@ contains
         do s = 1, me%nSizeClasses
             do l = C%nSedimentLayers, 1, -1
                 if (FS_dep(s)%M_f() > 0.0_dp) then
+                    ! Reset the receiving layer's water requirement for THIS layer to prevent compounding
+                    ! across layers
+                    V_w_b = 0.0_dp
                     associate(O => me%colBedSedimentLayers(l)%item)
                         if (O%A_f(s) > 0.0_dp .or. O%A_w(s) > 0.0_dp) then
                             if (O%volSLR(s) <= 1.0e-12_dp) then

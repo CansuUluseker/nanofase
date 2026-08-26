@@ -285,7 +285,8 @@ module DataOutputModule
                             trim(str(sum(reach%j_spm%outflow))) // "," // &
                             trim(str(sum(reach%j_spm%bankErosion))) // ","
                     end if
-                    write(iouOutputWater, '(a)') trim(str(reach%volume)) // "," // trim(str(reach%depth)) // "," // &
+                    write(iouOutputWater, '(a)') trim(str(reach%volume)) &
+                        // "," // trim(str(divideCheckZero(reach%volume, reach%bedArea))) // "," // &
                         trim(str(reach%Q%outflow / C%timeStep))
 
                     call m_contaminant%finalise()
@@ -431,7 +432,7 @@ module DataOutputModule
                         if (res_get%hasCriticalError() .or. .not. allocated(res_get%data)) then
                             call res_get%addToTrace(tr); return
                         end if
-                        select type (data => res_get%getData())
+                        select type (data => res_get%data)
                             type is (Contaminant); m_contaminant = data
                             class default; return
                         end select
@@ -453,7 +454,7 @@ module DataOutputModule
                         if (res_get%hasCriticalError() .or. .not. allocated(res_get%data)) then
                             call res_get%addToTrace(tr); return
                         end if
-                        select type (data => res_get%getData())
+                        select type (data => res_get%data)
                             type is (Contaminant); m_buried = data
                             class default; return
                         end select
@@ -474,7 +475,7 @@ module DataOutputModule
                                 if (res_l%hasCriticalError() .or. .not. allocated(res_l%data)) then
                                     call res_l%addToTrace(tr); cycle
                                 end if
-                                select type (data => res_l%getData())
+                                select type (data => res_l%data)
                                     type is (Contaminant); m_contaminant = data
                                     class default; cycle
                                 end select
@@ -542,7 +543,7 @@ module DataOutputModule
                                     if (res_l%hasCriticalError() .or. .not. allocated(res_l%data)) then
                                         call res_l%addToTrace(tr); cycle
                                     end if
-                                    select type (data => res_l%getData())
+                                    select type (data => res_l%data)
                                         type is (Contaminant); m_contaminant = data
                                         class default; cycle
                                     end select

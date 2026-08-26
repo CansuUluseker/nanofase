@@ -48,7 +48,7 @@ module DataInputModule
         real(dp) :: soilErosivity_a2                            ! Erosivity a2 parameter [-]
         real(dp) :: soilErosivity_a3                            ! Erosivity a3 parameter [-]
         real(dp) :: soilErosivity_b                             ! Erosivity b parameter [-]
-        real(dp) :: soilConstantAttachmentEfficiency            ! Attachment efficiency to soil matrix [-]
+        real(dp) :: soilAttachmentEfficiencyConstant            ! Attachment efficiency to soil matrix [-]
         real(dp) :: sedimentTransport_aConstant                 ! Sediment transport capacity a parameter (scaling factor) [kg/m2/km2]
         real(dp) :: sedimentTransport_bConstant                 ! Sediment transport capacity b parameter (overland flow threshold) [m2/s]
         real(dp) :: sedimentTransport_cConstant                 ! Sediment transport capacity c parameter (non-linear coefficient) [-]
@@ -232,7 +232,7 @@ contains
         class(Database)     :: me
         type(NcDataset)     :: nc_simulationMask
         type(NcVariable)    :: var
-        character(len=* )   :: inputFile, constantsFile
+        character(len=*)    :: inputFile, constantsFile
         type(Result)        :: rslt
         ! temps returned by mo_netcdf in Fortran order (reversed NetCDF dims)
         integer, allocatable :: outflow_dxy(:,:,:)
@@ -291,6 +291,19 @@ contains
             deallocate(isEstuaryInt_xy)
         else
             allocate(me%isEstuary(nx, ny)); me%isEstuary = .false.
+        end if
+
+        ! Digital elevation model [dm asl]
+        ! Reach%parseInputData uses this to derive the stream slope from the elevation drop
+        ! along the reach; if it isn't allocated, every reach silently falls back to
+        ! defaultSlope, which changes depth throughout the scenario
+        if (me%nc%hasVariable('dem')) then
+            var = me%nc%getVariable('dem'); call var%getData(me%dem)
+        else
+            call LOGR%toFile(errors=[ &
+                ErrorInstance(message='Digital elevation model (dem) not found in input file. ' // &
+                    'Default slope of ' // trim(str(defaultSlope)) // ' m/m will be used.', iscritical=.false.) &
+            ])
         end if
 
         ! Grid mask from nWaterbodies
@@ -597,7 +610,7 @@ contains
         else
             if (allocated(me%soilAttachmentEfficiency)) deallocate(me%soilAttachmentEfficiency)
             allocate(me%soilAttachmentEfficiency(ny,nx))
-            me%soilAttachmentEfficiency = me%soilConstantAttachmentEfficiency
+            me%soilAttachmentEfficiency = me%soilAttachmentEfficiencyConstant
         end if
 
 
@@ -832,9 +845,8 @@ contains
         if (me%nc%hasVariable('emissions_areal_soil_pristine')) then
             ! Try NEW name first
             var = me%nc%getVariable('emissions_areal_soil_pristine')
-            allocate(A2(nx,ny)); call var%getData(A2)
-            me%emissionsArealSoilContaminant(:,:,1,f_pris,PFAS_AQ) = A2
-            do n = 2, nsizes
+            allocate(A2(nx,ny)); call var%getData(A2); A2 = zeroFillValue(A2)
+            do n = 1, nsizes
                 me%emissionsArealSoilContaminant(:,:,n,f_pris,PFAS_AQ) = &
                     A2 * me%defaultDistributionContaminant(n)
             end do
@@ -844,11 +856,10 @@ contains
         else if (me%nc%hasVariable('emissions_areal_soil_nm')) then
             ! FALLBACK: Try OLD name (legacy support)
             var = me%nc%getVariable('emissions_areal_soil_nm')
-            allocate(A2(nx,ny)); call var%getData(A2)
+            allocate(A2(nx,ny)); call var%getData(A2); A2 = zeroFillValue(A2)
             
             ! Map legacy 'nm' emissions to 'pristine' form
-            me%emissionsArealSoilContaminant(:,:,1,f_pris,PFAS_AQ) = A2
-            do n = 2, nsizes
+            do n = 1, nsizes
                 me%emissionsArealSoilContaminant(:,:,n,f_pris,PFAS_AQ) = &
                     A2 * me%defaultDistributionContaminant(n)
             end do
@@ -860,9 +871,8 @@ contains
         ! -----------------------------------
         if (me%nc%hasVariable('emissions_areal_soil_matrixembedded')) then
             var = me%nc%getVariable('emissions_areal_soil_matrixembedded')
-            allocate(A2(nx,ny)); call var%getData(A2)
-            me%emissionsArealSoilContaminant(:,:,1,f_mat,PFAS_AQ) = A2
-            do n = 2, nsizes
+            allocate(A2(nx,ny)); call var%getData(A2); A2 = zeroFillValue(A2)
+            do n = 1, nsizes
                 me%emissionsArealSoilContaminant(:,:,n,f_mat,PFAS_AQ) = &
                     A2 * me%defaultDistributionContaminant(n)
             end do
@@ -873,9 +883,8 @@ contains
         ! -------------------------------
         if (me%nc%hasVariable('emissions_areal_soil_transformed')) then
             var = me%nc%getVariable('emissions_areal_soil_transformed')
-            allocate(A2(nx,ny)); call var%getData(A2)
-            me%emissionsArealSoilContaminant(:,:,1,f_tra,PFAS_AQ) = A2
-            do n = 2, nsizes
+            allocate(A2(nx,ny)); call var%getData(A2); A2 = zeroFillValue(A2)
+            do n = 1, nsizes
                 me%emissionsArealSoilContaminant(:,:,n,f_tra,PFAS_AQ) = &
                     A2 * me%defaultDistributionContaminant(n)
             end do
@@ -887,9 +896,8 @@ contains
         if (me%nc%hasVariable('emissions_areal_water_pristine')) then
             ! Try NEW name first
             var = me%nc%getVariable('emissions_areal_water_pristine')
-            allocate(A2(nx,ny)); call var%getData(A2)
-            me%emissionsArealWaterContaminant(:,:,1,f_pris,PFAS_AQ) = A2
-            do n = 2, nsizes
+            allocate(A2(nx,ny)); call var%getData(A2); A2 = zeroFillValue(A2)
+            do n = 1, nsizes
                 me%emissionsArealWaterContaminant(:,:,n,f_pris,PFAS_AQ) = &
                     A2 * me%defaultDistributionContaminant(n)
             end do
@@ -899,11 +907,10 @@ contains
         else if (me%nc%hasVariable('emissions_areal_water_nm')) then
             ! FALLBACK: Try OLD name (legacy support)
             var = me%nc%getVariable('emissions_areal_water_nm')
-            allocate(A2(nx,ny)); call var%getData(A2)
+            allocate(A2(nx,ny)); call var%getData(A2); A2 = zeroFillValue(A2)
             
             ! Map legacy 'nm' emissions to 'pristine' form
-            me%emissionsArealWaterContaminant(:,:,1,f_pris,PFAS_AQ) = A2
-            do n = 2, nsizes
+            do n = 1, nsizes
                 me%emissionsArealWaterContaminant(:,:,n,f_pris,PFAS_AQ) = &
                     A2 * me%defaultDistributionContaminant(n)
             end do
@@ -915,9 +922,8 @@ contains
         ! ------------------------------------
         if (me%nc%hasVariable('emissions_areal_water_matrixembedded')) then
             var = me%nc%getVariable('emissions_areal_water_matrixembedded')
-            allocate(A2(nx,ny)); call var%getData(A2)
-            me%emissionsArealWaterContaminant(:,:,1,f_mat,PFAS_AQ) = A2
-            do n = 2, nsizes
+            allocate(A2(nx,ny)); call var%getData(A2); A2 = zeroFillValue(A2)
+            do n = 1, nsizes
                 me%emissionsArealWaterContaminant(:,:,n,f_mat,PFAS_AQ) = &
                     A2 * me%defaultDistributionContaminant(n)
             end do
@@ -928,9 +934,8 @@ contains
         ! --------------------------------
         if (me%nc%hasVariable('emissions_areal_water_transformed')) then
             var = me%nc%getVariable('emissions_areal_water_transformed')
-            allocate(A2(nx,ny)); call var%getData(A2)
-            me%emissionsArealWaterContaminant(:,:,1,f_tra,PFAS_AQ) = A2
-            do n = 2, nsizes
+            allocate(A2(nx,ny)); call var%getData(A2); A2 = zeroFillValue(A2)
+            do n = 1, nsizes
                 me%emissionsArealWaterContaminant(:,:,n,f_tra,PFAS_AQ) = &
                     A2 * me%defaultDistributionContaminant(n)
             end do
@@ -941,14 +946,14 @@ contains
         ! ----------------------
         if (me%nc%hasVariable('emissions_areal_soil_dissolved')) then
             var = me%nc%getVariable('emissions_areal_soil_dissolved')
-            allocate(A2(nx,ny)); call var%getData(A2)
+            allocate(A2(nx,ny)); call var%getData(A2); A2 = zeroFillValue(A2)
             me%emissionsArealSoilDissolvedContaminant = A2
             deallocate(A2)
         end if
 
         if (me%nc%hasVariable('emissions_areal_water_dissolved')) then
             var = me%nc%getVariable('emissions_areal_water_dissolved')
-            allocate(A2(nx,ny)); call var%getData(A2)
+            allocate(A2(nx,ny)); call var%getData(A2); A2 = zeroFillValue(A2)
             me%emissionsArealWaterDissolvedContaminant = A2
             deallocate(A2)
         end if
@@ -958,9 +963,8 @@ contains
         !-----------------------------------------
         if (me%nc%hasVariable('emissions_atmospheric_drydepo_pristine')) then
             var = me%nc%getVariable('emissions_atmospheric_drydepo_pristine')
-            allocate(A3(nx,ny,nt)); call var%getData(A3)
-            me%emissionsAtmosphericDryDepoContaminant(:,:,:,1,f_pris,PFAS_AQ) = A3
-            do n = 2, nsizes
+            allocate(A3(nx,ny,nt)); call var%getData(A3); A3 = zeroFillValue(A3)
+            do n = 1, nsizes
                 me%emissionsAtmosphericDryDepoContaminant(:,:,:,n,f_pris,PFAS_AQ) = &
                     A3 * me%defaultDistributionContaminant(n)
             end do
@@ -969,9 +973,8 @@ contains
 
         if (me%nc%hasVariable('emissions_atmospheric_drydepo_matrixembedded')) then
             var = me%nc%getVariable('emissions_atmospheric_drydepo_matrixembedded')
-            allocate(A3(nx,ny,nt)); call var%getData(A3)
-            me%emissionsAtmosphericDryDepoContaminant(:,:,:,1,f_mat,PFAS_AQ) = A3
-            do n = 2, nsizes
+            allocate(A3(nx,ny,nt)); call var%getData(A3); A3 = zeroFillValue(A3)
+            do n = 1, nsizes
                 me%emissionsAtmosphericDryDepoContaminant(:,:,:,n,f_mat,PFAS_AQ) = &
                     A3 * me%defaultDistributionContaminant(n)
             end do
@@ -980,9 +983,8 @@ contains
 
         if (me%nc%hasVariable('emissions_atmospheric_drydepo_transformed')) then
             var = me%nc%getVariable('emissions_atmospheric_drydepo_transformed')
-            allocate(A3(nx,ny,nt)); call var%getData(A3)
-            me%emissionsAtmosphericDryDepoContaminant(:,:,:,1,f_tra,PFAS_AQ) = A3
-            do n = 2, nsizes
+            allocate(A3(nx,ny,nt)); call var%getData(A3); A3 = zeroFillValue(A3)
+            do n = 1, nsizes
                 me%emissionsAtmosphericDryDepoContaminant(:,:,:,n,f_tra,PFAS_AQ) = &
                     A3 * me%defaultDistributionContaminant(n)
             end do
@@ -991,9 +993,8 @@ contains
 
         if (me%nc%hasVariable('emissions_atmospheric_wetdepo_pristine')) then
             var = me%nc%getVariable('emissions_atmospheric_wetdepo_pristine')
-            allocate(A3(nx,ny,nt)); call var%getData(A3)
-            me%emissionsAtmosphericWetDepoContaminant(:,:,:,1,f_pris,PFAS_AQ) = A3
-            do n = 2, nsizes
+            allocate(A3(nx,ny,nt)); call var%getData(A3); A3 = zeroFillValue(A3)
+            do n = 1, nsizes
                 me%emissionsAtmosphericWetDepoContaminant(:,:,:,n,f_pris,PFAS_AQ) = &
                     A3 * me%defaultDistributionContaminant(n)
             end do
@@ -1002,9 +1003,8 @@ contains
 
         if (me%nc%hasVariable('emissions_atmospheric_wetdepo_matrixembedded')) then
             var = me%nc%getVariable('emissions_atmospheric_wetdepo_matrixembedded')
-            allocate(A3(nx,ny,nt)); call var%getData(A3)
-            me%emissionsAtmosphericWetDepoContaminant(:,:,:,1,f_mat,PFAS_AQ) = A3
-            do n = 2, nsizes
+            allocate(A3(nx,ny,nt)); call var%getData(A3); A3 = zeroFillValue(A3)
+            do n = 1, nsizes
                 me%emissionsAtmosphericWetDepoContaminant(:,:,:,n,f_mat,PFAS_AQ) = &
                     A3 * me%defaultDistributionContaminant(n)
             end do
@@ -1013,9 +1013,8 @@ contains
 
         if (me%nc%hasVariable('emissions_atmospheric_wetdepo_transformed')) then
             var = me%nc%getVariable('emissions_atmospheric_wetdepo_transformed')
-            allocate(A3(nx,ny,nt)); call var%getData(A3)
-            me%emissionsAtmosphericWetDepoContaminant(:,:,:,1,f_tra,PFAS_AQ) = A3
-            do n = 2, nsizes
+            allocate(A3(nx,ny,nt)); call var%getData(A3); A3 = zeroFillValue(A3)
+            do n = 1, nsizes
                 me%emissionsAtmosphericWetDepoContaminant(:,:,:,n,f_tra,PFAS_AQ) = &
                     A3 * me%defaultDistributionContaminant(n)
             end do
@@ -1024,14 +1023,14 @@ contains
 
         if (me%nc%hasVariable('emissions_atmospheric_drydepo_dissolved')) then
             var = me%nc%getVariable('emissions_atmospheric_drydepo_dissolved')
-            allocate(A3(nx,ny,nt)); call var%getData(A3)
+            allocate(A3(nx,ny,nt)); call var%getData(A3); A3 = zeroFillValue(A3)
             me%emissionsAtmosphericDryDepoDissolvedContaminant = A3
             deallocate(A3)
         end if
 
         if (me%nc%hasVariable('emissions_atmospheric_wetdepo_dissolved')) then
             var = me%nc%getVariable('emissions_atmospheric_wetdepo_dissolved')
-            allocate(A3(nx,ny,nt)); call var%getData(A3)
+            allocate(A3(nx,ny,nt)); call var%getData(A3); A3 = zeroFillValue(A3)
             me%emissionsAtmosphericWetDepoDissolvedContaminant = A3
             deallocate(A3)
         end if
@@ -1071,10 +1070,8 @@ contains
 
             if (me%nc%hasVariable('emissions_point_water_pristine')) then
                 var = me%nc%getVariable('emissions_point_water_pristine')
-                allocate(A4(nx,ny,nt,np)); call var%getData(A4)   ! (x,y,t,p)
-                ! size=1 takes raw; n=2..nsizes distributed
-                me%emissionsPointWaterContaminant(:,:,:,1:np,1,f_pris,PFAS_AQ) = A4
-                do n = 2, nsizes
+                allocate(A4(nx,ny,nt,np)); call var%getData(A4); A4 = zeroFillValue(A4)   ! (x,y,t,p)
+                do n = 1, nsizes
                     me%emissionsPointWaterContaminant(:,:,:,1:np,n,f_pris,PFAS_AQ) = &
                         A4 * me%defaultDistributionContaminant(n)
                 end do
@@ -1083,9 +1080,8 @@ contains
 
             if (me%nc%hasVariable('emissions_point_water_matrixembedded')) then
                 var = me%nc%getVariable('emissions_point_water_matrixembedded')
-                allocate(A4(nx,ny,nt,np)); call var%getData(A4)   ! (x,y,t,p)
-                me%emissionsPointWaterContaminant(:,:,:,1:np,1,f_mat,PFAS_AQ) = A4
-                do n = 2, nsizes
+                allocate(A4(nx,ny,nt,np)); call var%getData(A4); A4 = zeroFillValue(A4)   ! (x,y,t,p)
+                do n = 1, nsizes
                     me%emissionsPointWaterContaminant(:,:,:,1:np,n,f_mat,PFAS_AQ) = &
                         A4 * me%defaultDistributionContaminant(n)
                 end do
@@ -1095,9 +1091,8 @@ contains
             ! Optional: only if present in file
             if (me%nc%hasVariable('emissions_point_water_transformed')) then
                 var = me%nc%getVariable('emissions_point_water_transformed')
-                allocate(A4(nx,ny,nt,np)); call var%getData(A4)   ! (x,y,t,p)
-                me%emissionsPointWaterContaminant(:,:,:,1:np,1,f_tra,PFAS_AQ) = A4
-                do n = 2, nsizes
+                allocate(A4(nx,ny,nt,np)); call var%getData(A4); A4 = zeroFillValue(A4)   ! (x,y,t,p)
+                do n = 1, nsizes
                     me%emissionsPointWaterContaminant(:,:,:,1:np,n,f_tra,PFAS_AQ) = &
                         A4 * me%defaultDistributionContaminant(n)
                 end do
@@ -1207,7 +1202,7 @@ contains
         integer, allocatable :: default_contaminant_size_distribution(:), default_spm_size_distribution(:), &
                             default_matrixembedded_distribution_to_spm(:), vertical_distribution(:), &
                             harvest_in_month(:)
-        real, allocatable :: stored_fraction(:), porosity(:), sedimentInitialMass(:), &
+        real, allocatable :: stored_fraction(:), porosity(:), initial_mass(:), &
                             fractional_composition_distribution(:), spm_density_by_size_class(:), &
                             default_contaminant_form_distribution(:)
         real :: darcy_velocity, default_porosity, particle_density, estuary_tidal_S2, &
@@ -1219,7 +1214,7 @@ contains
                     resuspension_alpha_estuary, resuspension_beta_estuary, k_diss_pristine, &
                     k_diss_transformed, k_transform_pristine, erosivity_a1, erosivity_a2, &
                     erosivity_a3, erosivity_b, contaminant_density, estuary_attachment_efficiency, &
-                    soil_constant_attachment_efficiency, river_attachment_efficiency, &
+                    soil_attachment_efficiency, river_attachment_efficiency, &
                     sediment_transport_a, sediment_transport_b, sediment_transport_c, &
                     sediment_enrichment_k, sediment_enrichment_a, min_water_temperature, &
                     max_water_temperature, shear_rate
@@ -1249,7 +1244,7 @@ contains
         namelist /earthworm_densities/ arable, coniferous, deciduous, grassland, heathland, &
             urban_capped, urban_gardens, urban_parks, vertical_distribution
         namelist /soil/ darcy_velocity, default_porosity, hamaker_constant, particle_density, &
-            erosivity_a1, erosivity_a2, erosivity_a3, erosivity_b, soil_constant_attachment_efficiency, &
+            erosivity_a1, erosivity_a2, erosivity_a3, erosivity_b, soil_attachment_efficiency, &
             sediment_transport_a, sediment_transport_b, sediment_transport_c
         namelist /water/ resuspension_alpha, resuspension_beta, resuspension_alpha_estuary, &
             resuspension_beta_estuary, estuary_tidal_m2, estuary_tidal_s2, estuary_mouth_coords, &
@@ -1258,7 +1253,7 @@ contains
             estuary_attachment_efficiency, deposition_alpha, deposition_beta, bank_erosion_alpha, &
             bank_erosion_beta, shear_rate, min_water_temperature, max_water_temperature, &
             min_water_temperature_day_of_year
-        namelist /sediment/ porosity, sedimentInitialMass, fractional_composition_distribution, &
+        namelist /sediment/ porosity, initial_mass, fractional_composition_distribution, &
             default_spm_size_distribution, default_matrixembedded_distribution_to_spm, &
             sediment_enrichment_a, sediment_enrichment_k, spm_density_by_size_class
 
@@ -1269,11 +1264,11 @@ contains
         k_diss_pristine = default_k_diss_pristine
         k_diss_transformed = default_k_diss_transformed
         k_transform_pristine = default_k_transform_pristine
-        soil_constant_attachment_efficiency = defaultSoilAttachmentEfficiency
+        soil_attachment_efficiency = defaultSoilAttachmentEfficiency
         river_attachment_efficiency = defaultRiverAttachmentEfficiency
         resuspension_alpha_estuary = 0.0_dp
         resuspension_beta_estuary = 0.0_dp
-        soil_constant_attachment_efficiency = real(defaultSoilAttachmentEfficiency, dp)
+        soil_attachment_efficiency = real(defaultSoilAttachmentEfficiency, dp)
         river_attachment_efficiency = real(defaultRiverAttachmentEfficiency, dp)
         estuary_attachment_efficiency = defaultEstuaryAttachmentEfficiency
         darcy_velocity = defaultSoilDarcyVelocity
@@ -1315,7 +1310,7 @@ contains
                 default_matrixembedded_distribution_to_spm(n_default_matrixembedded_distribution_to_spm), &
                 vertical_distribution(n_vertical_distribution), &
                 porosity(n_porosity), &
-                sedimentInitialMass(n_initial_mass), &
+                initial_mass(n_initial_mass), &
                 fractional_composition_distribution(n_fractional_composition_distribution), &
                 spm_density_by_size_class(n_spm_density_by_size_class), &
                 contaminant_size_classes(n_contaminant_size_classes), &
@@ -1527,7 +1522,7 @@ contains
         me%soilDefaultPorosity = default_porosity
         me%soilHamakerConstant = hamaker_constant
         me%soilParticleDensity = particle_density
-        me%soilConstantAttachmentEfficiency = soil_constant_attachment_efficiency
+        me%soilAttachmentEfficiencyConstant = soil_attachment_efficiency
         me%soilErosivity_a1 = erosivity_a1
         me%soilErosivity_a2 = erosivity_a2
         me%soilErosivity_a3 = erosivity_a3
@@ -1599,7 +1594,7 @@ contains
         me%estuaryWidthExpB = estuary_width_expb
         me%estuaryMeanderingFactor = estuary_meandering_factor
         me%estuaryMouthCoords = estuary_mouth_coords
-        me%sedimentInitialMass = sedimentInitialMass 
+        me%sedimentInitialMass = initial_mass
         me%sedimentPorosity = porosity
         me%sedimentFractionalComposition = fractional_composition_distribution
         me%sedimentEnrichment_k = sediment_enrichment_k
@@ -1607,6 +1602,22 @@ contains
         me%spmDensityBySizeClass = spm_density_by_size_class
 
     end subroutine
+
+    !> Replace NetCDF fill values with zero. Emissions variables use the fill value to
+    !! mean "nothing emitted here" (e.g. cells with no point source, or a point source
+    !! slot that isn't occupied in this cell), so it must be zeroed before the value is
+    !! used in arithmetic. This has to happen as soon as the variable is read, because
+    !! the emissions are subsequently distributed across contaminant size classes, which
+    !! scales the fill value and makes it unrecognisable further downstream.
+    elemental function zeroFillValue(x) result(y)
+        real(dp), intent(in) :: x
+        real(dp) :: y
+        if (x == nf90_fill_double .or. x == real(nf90_fill_real, dp)) then
+            y = 0.0_dp
+        else
+            y = x
+        end if
+    end function
 
     !> Elemental function for getting a mask from an int2 array, where the NetCDF
     !! fill value nf90_fill_int2 is used to mask values

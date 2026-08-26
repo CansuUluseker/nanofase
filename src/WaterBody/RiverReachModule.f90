@@ -56,7 +56,7 @@ contains
         call rslt%addErrors(.errors. me%m_contaminant%create_from_data( &
             compartment='water', &
             contaminantDensity=DATASET%contaminantDensity, &
-            soilAttachmentEfficiency=DATASET%soilConstantAttachmentEfficiency, &
+            soilAttachmentEfficiency=DATASET%soilAttachmentEfficiencyConstant, &
             riverAttachmentEfficiency=DATASET%riverAttachmentEfficiency, &
             estuaryAttachmentEfficiency=DATASET%estuaryAttachmentEfficiency, &
             k_diss_pristine=DATASET%contaminant_k_diss_pristine, &
@@ -109,7 +109,7 @@ contains
                 C_spm=me%C_spm, W_settle_spm=me%W_settle_spm, &
                 G=DATASET%shearRate, velocity=me%velocity) ])
 
-        ! Water biota (unchanged)
+        ! Water biota
         allocate(me%biotaIndices(0))
         if (DATASET%hasBiota) then
             do i = 1, DATASET%nBiota
@@ -164,7 +164,9 @@ contains
         else
             temp_contaminant%m_dissolved = 0.0_dp
         end if
-        call me%j_contaminant_diffuseSources%add(temp_contaminant)
+        ! Areal emissions are kg/m2/timestep, so must be scaled by the reach's surface
+        ! area to get kg/reach/timestep. Point sources above are already kg/point.
+        call me%j_contaminant_diffuseSources%add_scaled(temp_contaminant, me%surfaceArea)
         call temp_contaminant%finalise()
 
         call rslt%addToTrace("Updating sources for " // trim(me%ref) // " on timestep #" // trim(str(t)))
@@ -197,14 +199,13 @@ contains
         ! Reset all flows to zero (water/SPM done inside WaterBody/Reach)
         call me%emptyFlows()
 
-        ! --- hard reset contaminant flux holders each timestep (prevents junk in outputs) ---
+        ! Hard reset contaminant flux holders each timestep (prevents junk in outputs)
         call rslt%addErrors(.errors. me%j_contaminant_inflow%create())
         call rslt%addErrors(.errors. me%j_contaminant_runoff%create())
         call rslt%addErrors(.errors. me%j_contaminant_transfers%create())
         call rslt%addErrors(.errors. me%j_contaminant_deposition%create())
         call rslt%addErrors(.errors. me%j_contaminant_resuspension%create())
         call rslt%addErrors(.errors. me%j_contaminant_outflow%create())
-        ! -------------------------------------------------------------------------------------
 
         ! Get the current date and use the day of year to get the water temp
         currentDate = C%startDate + timedelta(t-1)
@@ -225,8 +226,9 @@ contains
         ! Erosion yields & bank erosion; store in flow objects
         call me%setErosionYields(j_spm_runoff, q_overland, contributingArea, j_contaminant_runoff)
 
-        ! Point + diffuse sources (if any flow)
-        if (.not. C%ignoreContaminant .and. .not. isZero(me%Q_in_total)) then
+        ! Point + diffuse sources (if any flow). Skipped during the warm up period, which is
+        ! meant to settle the flows without any contaminant input - see EstuaryReach%update
+        if (.not. C%ignoreContaminant .and. .not. isWarmUp .and. .not. isZero(me%Q_in_total)) then
             call me%updateSources(t)
         end if
 
@@ -344,7 +346,6 @@ contains
             dj_spm_deposit = min(dj_spm_deposit, me%m_spm + dj_spm_in)
 
             ! Resuspension demand as an area flux; bed returns the accepted amount
-            ! print *, 'mf_bed_by_size', me%bedSediment%Mf_bed_by_size()
             dj_spm_resus_perArea  = flushToZero(me%k_resus * me%bedSediment%Mf_bed_by_size() * dt)
             dj_spm_resus_perArea_ = dj_spm_resus_perArea
             call rslt%addErrors(.errors. me%bedSediment%resuspend(dj_spm_resus_perArea_))
@@ -375,7 +376,7 @@ contains
                         call rslt%addErrors(res_contaminant%getErrors()); call LOGR%toFile(errors = .errors. rslt)
                         call ERROR_HANDLER%trigger(errors = .errors. rslt); return
                     end if
-                    select type (data => res_contaminant%getData())
+                    select type (data => res_contaminant%data)
                         type is (Contaminant); bed_before = data
                         class default
                             call rslt%addError(ErrorInstance(code=106, message="Invalid data type in Result0D"))
@@ -401,7 +402,7 @@ contains
                     call rslt%addErrors(res_contaminant%getErrors()); call LOGR%toFile(errors = .errors. rslt)
                     call ERROR_HANDLER%trigger(errors = .errors. rslt); return
                 end if
-                select type (data2 => res_contaminant%getData())
+                select type (data2 => res_contaminant%data)
                     type is (Contaminant)
                         m_contaminant = data2
                     class default
@@ -474,7 +475,7 @@ contains
                     if (res_contaminant%hasError()) then
                         call rslt%addErrors(res_contaminant%getErrors()); call LOGR%toFile(errors = .errors. rslt)
                     else
-                        select type (data3 => res_contaminant%getData())
+                        select type (data3 => res_contaminant%data)
                             type is (Contaminant); bed_after = data3
                             class default
                                 call rslt%addError(ErrorInstance(code=106, message="Invalid data type in Result0D(b)"))
@@ -503,8 +504,7 @@ contains
         else
             ! dry/empty: zero SPM and reset contaminant container
             me%m_spm = 0.0_dp
-            call rslt%addErrors(.errors. me%m_contaminant%create())
-            call me%m_contaminant%finalise()
+            call me%m_contaminant%empty()
         end if
   
         ! ------------------------------------------------------------------
@@ -516,7 +516,7 @@ contains
             call w_after%add(me%m_contaminant)
             res_contaminant = me%bedSediment%get_m_contaminant()
             if (.not. res_contaminant%hasError()) then
-                select type (data2 => res_contaminant%getData())
+                select type (data2 => res_contaminant%data)
                     type is (Contaminant)
                         call bed_after%add(data2)
                     class default
