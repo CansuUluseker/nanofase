@@ -99,8 +99,28 @@ min_stream_slope = 0.0001                               ! Impose a minimum strea
 min_estuary_timestep = 3600                             ! Minimum timestep length to use when modelling estuarine dynamics [s]. Defaults to 1 hour
 include_estuary = .true.                                ! Should we model estuaries, or treat them as rivers?
 include_bank_erosion = .true.                           ! Should we model the input of sediment via bank erosion?
+include_lakes = .true.                                  ! Should cells flagged as lakes/reservoirs in the input data be modelled as lake/reservoir segments?
+                                                        ! Cells are flagged by the 'is_lake'/'is_reservoir' masks, or by 'lake_id' (an integer id shared by
+                                                        ! the segments of a multi-cell lake; also flags lake cells if 'is_lake' is absent). The optional
+                                                        ! 'lake_outflow' variable (same layout as 'outflow') gives the lake routing network - where each
+                                                        ! segment discharges (the next segment of the same lake, or the outlet river cell); it overrides
+                                                        ! the general routing for flagged cells and the inflow network is rebuilt to match. Other optional
+                                                        ! inputs: 'lake_depth' [m], 'lake_area_fraction' [-], 'reservoir_release_rate' [m3/s],
+                                                        ! 'reservoir_spillway_type' (0 uncontrolled, 1 controlled, 2 combination), and 'wind_speed' [m/s] /
+                                                        ! 'solar_radiation' [W/m2] time series for thermal stratification. Process constants can be tuned
+                                                        ! in the optional &lake group of the constants file.
 /
 
 &sources
 include_point_sources = .true.                          ! Should point sources be included?
+/
+
+&hydrology                                              ! Optional group: maps the variables your hydrological dataset provides onto the runoff components P-FASE needs.
+                                                        ! Total runoff is the minimum requirement. If surface runoff is supplied it is used directly; if subsurface
+                                                        ! runoff is supplied, the missing component is derived from it; if only total runoff is supplied, it is
+                                                        ! partitioned using surface_runoff_fraction. Set a variable name to '' if your dataset doesn't provide it.
+total_runoff_variable = 'runoff'                        ! Input variable containing total runoff [m/timestep]
+surface_runoff_variable = 'quickflow'                   ! Input variable containing surface (overland) runoff [m/timestep]
+subsurface_runoff_variable = ''                         ! Input variable containing subsurface runoff/baseflow [m/timestep]
+surface_runoff_fraction = 0.0                           ! Fraction of total runoff treated as surface runoff, when only total runoff is supplied [-]
 /

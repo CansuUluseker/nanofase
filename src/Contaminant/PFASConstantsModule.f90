@@ -1,4 +1,4 @@
-module PFASEConstantsModule
+module PFASConstantsModule
     !! Central constants for P-FASE PFAS state indexing.
     !! All PFAS mass arrays use c(species, form, phase).
     implicit none
@@ -11,7 +11,7 @@ module PFASEConstantsModule
     integer, parameter, public :: PFAS_NPHASES = 6
     integer, parameter, public :: PFAS_MAX_NAME = 64
 contains
-    pure function pfase_phase_name(phase) result(name)
+    pure function pfas_phase_name(phase) result(name)
         integer, intent(in) :: phase
         character(len=16) :: name
         select case (phase)
@@ -23,5 +23,5 @@ contains
         case (PFAS_AIR);  name = 'air'
         case default;     name = 'unknown'
         end select
-    end function pfase_phase_name
+    end function pfas_phase_name
 end module 

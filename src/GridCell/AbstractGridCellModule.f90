@@ -8,7 +8,7 @@ module AbstractGridCellModule
     use DiffuseSourceModule
     use CropModule
     use ContaminantModule
-    use PFASEConstantsModule, only: PFAS_AQ, PFAS_SOL, PFAS_SPM, PFAS_AWI, PFAS_FOAM, PFAS_AIR
+    use PFASConstantsModule, only: PFAS_AQ, PFAS_SOL, PFAS_SPM, PFAS_AWI, PFAS_FOAM, PFAS_AIR
     implicit none
 
     !> GridCellPointer used to link GridCells array, so the elements within can
@@ -33,8 +33,8 @@ module AbstractGridCellModule
         real                            :: dy                                   !! Size of GridCell in y direction [m]
         real(dp)                        :: area                                 !! Area of the GridCell
         type(ReachElement), allocatable :: colRiverReaches(:)                   !! Array of `RiverReachElement` objects to hold the RiverReaches
-        character(len=3), allocatable   :: reachTypes(:)                        !! Type of each indexed reach within this cell - 'riv' or 'est'
-        character(len=3)                :: aggregatedReachType                  !! Type of reaches in this cell - 'riv', 'est' or 'mix'
+        character(len=3), allocatable   :: reachTypes(:)                        !! Type of each indexed reach within this cell - 'riv', 'est', 'lak' or 'res'
+        character(len=3)                :: aggregatedReachType                  !! Type of reaches in this cell - 'riv', 'est', 'lak', 'res' or 'mix'
         type(GridCellPointer)           :: outflow                              !! Where does the outflow reach from this GridCell go to?
             !! Array of `RiverReachPointer` objects to order rivers in routing order and by branch.
             !! 1st dimension: Branches. 2nd dimension: RiverReaches in that branch
@@ -46,8 +46,8 @@ module AbstractGridCellModule
         integer                         :: nSoilProfiles = 0                    !! Number of contained `SoilProfile`s
             !! Number of reaches in each branch. Needed as different branches might have different numbers of reaches
             !! (and Fortran matrices must be rectangular)
-        real(dp), allocatable           :: q_runoff_timeSeries(:)               !! Runoff = slow flow + quick flow, from the hydrological model [m/timestep]
-        real(dp), allocatable           :: q_quickflow_timeSeries(:)            !! Quick flow from the hydrological model [m/timestep]
+        real(dp), allocatable           :: q_runoff_timeSeries(:)               !! Total runoff (surface + subsurface), from the hydrology input adapter [m/timestep]
+        real(dp), allocatable           :: q_quickflow_timeSeries(:)            !! Surface (overland) runoff, from the hydrology input adapter [m/timestep]
         real, allocatable               :: q_evap_timeSeries(:)                 !! Evaporation time series [m/s]
         real, allocatable               :: q_precip_timeSeries(:)               !! Precipitation time series [m/s]
         real(dp)                        :: q_runoff                             !! Runoff from the hydrological model for this time step [m/timestep]

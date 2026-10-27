@@ -1,5 +1,5 @@
 module NetCDFAggregatedOutputModule
-    use PFASEConstantsModule, only: PFAS_AQ, PFAS_SOL, PFAS_SPM, PFAS_AWI, PFAS_FOAM, PFAS_AIR, PFAS_NPHASES
+    use PFASConstantsModule, only: PFAS_AQ, PFAS_SOL, PFAS_SPM, PFAS_AWI, PFAS_FOAM, PFAS_AIR, PFAS_NPHASES
     use GlobalsModule, only: C, dp
     use UtilModule
     use mo_netcdf, only: NcDataset, NcVariable, NcDimension, nf90_fill_int, nf90_fill_double
@@ -41,6 +41,8 @@ module NetCDFAggregatedOutputModule
         real(dp), allocatable :: output_agg_water__m_spm_outflow(:,:,:)
         real(dp), allocatable :: output_agg_water__m_spm_bank_erosion(:,:,:)
         real(dp), allocatable :: output_agg_water__volume(:,:,:)
+        real(dp), allocatable :: output_agg_water__j_contaminant_foam(:,:,:)
+        real(dp), allocatable :: output_agg_water__j_contaminant_atmosphere(:,:,:)
         real(dp), allocatable :: output_agg_water__depth(:,:,:)
         real(dp), allocatable :: output_agg_water__flow(:,:,:)
         real(dp), allocatable :: output_agg_sediment__m_contaminant_total(:,:,:,:)
@@ -96,7 +98,8 @@ contains
         type(Contaminant) :: j_contaminant_resuspended
         real(dp) :: C_contaminant
         real(dp) :: C_dissolved
-        real(dp) :: volume
+        real(dp) :: volume, j_foam, j_air
+        integer :: w
         type(Result0D) :: r
         character(len=256) :: tr
         tr = "NetCDFAggregatedOutputModule%updateWaterNetCDFAggregatedOutput"
@@ -121,6 +124,15 @@ contains
                 j_contaminant_deposited   = cell%get_j_contaminant_deposition()
                 j_contaminant_resuspended = cell%get_j_contaminant_resuspension()
                 volume = cell%getWaterVolume()
+                ! Surface losses (foam, atmosphere) summed over the cell's water bodies
+                j_foam = 0.0_dp
+                j_air = 0.0_dp
+                do w = 1, cell%nReaches
+                    if (allocated(cell%colRiverReaches(w)%item%j_contaminant_foam%c)) &
+                        j_foam = j_foam + sum(cell%colRiverReaches(w)%item%j_contaminant_foam%c)
+                    if (allocated(cell%colRiverReaches(w)%item%j_contaminant_atmosphere%c)) &
+                        j_air = j_air + sum(cell%colRiverReaches(w)%item%j_contaminant_atmosphere%c)
+                end do
 
                 if (C%netCDFWriteMode == 'end') then
                     ! ---- form-first (form, x, y, t) ----
@@ -178,6 +190,8 @@ contains
                     end if
 
                     me%output_agg_water__volume(x, y, tInChunk) = volume
+                    me%output_agg_water__j_contaminant_foam(x, y, tInChunk) = j_foam
+                    me%output_agg_water__j_contaminant_atmosphere(x, y, tInChunk) = j_air
                     me%output_agg_water__depth( x, y, tInChunk) = cell%getWaterDepth()
                     me%output_agg_water__flow(  x, y, tInChunk) = cell%get_Q_outflow() / C%timeStep
 
@@ -227,6 +241,8 @@ contains
                     end if
 
                     call me%nc__water__volume%setData(volume, start=[x, y, t])
+                    call me%nc__water__j_contaminant_foam%setData(j_foam, start=[x, y, t])
+                    call me%nc__water__j_contaminant_atmosphere%setData(j_air, start=[x, y, t])
                     call me%nc__water__depth%setData(cell%getWaterDepth(), start=[x, y, t])
                     call me%nc__water__flow%setData(cell%get_Q_outflow() / C%timeStep, start=[x, y, t])
                 end if
@@ -445,6 +461,20 @@ contains
         call me%nc__water__volume%setAttribute('long_name', 'Volume of water')
         call me%nc__water__volume%setAttribute('grid_mapping', 'spatial_ref')
         call me%nc__water__volume%setAttribute('_FillValue', nf90_fill_double)
+        me%nc__water__j_contaminant_foam = me%nc%setVariable('water__j_contaminant_foam', 'f64', &
+            [me%x_dim, me%y_dim, me%t_dim])
+        call me%nc__water__j_contaminant_foam%setAttribute('units', 'kg/timestep')
+        call me%nc__water__j_contaminant_foam%setAttribute('long_name', &
+            'PFAS exported from the water surface (air-water interface) to foam; negative = loss')
+        call me%nc__water__j_contaminant_foam%setAttribute('grid_mapping', 'spatial_ref')
+        call me%nc__water__j_contaminant_foam%setAttribute('_FillValue', nf90_fill_double)
+        me%nc__water__j_contaminant_atmosphere = me%nc%setVariable('water__j_contaminant_atmosphere', 'f64', &
+            [me%x_dim, me%y_dim, me%t_dim])
+        call me%nc__water__j_contaminant_atmosphere%setAttribute('units', 'kg/timestep')
+        call me%nc__water__j_contaminant_atmosphere%setAttribute('long_name', &
+            'PFAS lost to the atmosphere by volatilisation and sea-spray aerosol; negative = loss')
+        call me%nc__water__j_contaminant_atmosphere%setAttribute('grid_mapping', 'spatial_ref')
+        call me%nc__water__j_contaminant_atmosphere%setAttribute('_FillValue', nf90_fill_double)
 
         me%nc__water__depth = me%nc%setVariable('water__depth', 'f64', [me%x_dim, me%y_dim, me%t_dim])
         call me%nc__water__depth%setAttribute('units', 'm')
@@ -558,6 +588,8 @@ contains
             allocate(me%output_agg_water__m_spm_bank_erosion, source=empty3DArray)
         end if
         allocate(me%output_agg_water__volume, source=empty3DArray)
+        allocate(me%output_agg_water__j_contaminant_foam, source=empty3DArray)
+        allocate(me%output_agg_water__j_contaminant_atmosphere, source=empty3DArray)
         allocate(me%output_agg_water__depth,  source=empty3DArray)
         allocate(me%output_agg_water__flow,   source=empty3DArray)
 
@@ -669,6 +701,9 @@ contains
         end if
         call me%nc__water__volume%setData(                  me%output_agg_water__volume,                  &
                                                             start=[1,1,tStart])
+        call me%nc__water__j_contaminant_foam%setData(me%output_agg_water__j_contaminant_foam, start=[1,1,tStart])
+        call me%nc__water__j_contaminant_atmosphere%setData(me%output_agg_water__j_contaminant_atmosphere, &
+            start=[1,1,tStart])
         call me%nc__water__depth%setData(                   me%output_agg_water__depth,                   &
                                                             start=[1,1,tStart])
         call me%nc__water__flow%setData(                    me%output_agg_water__flow,                    &
@@ -731,6 +766,8 @@ contains
             deallocate(me%output_agg_water__m_spm_bank_erosion)
         end if
         deallocate(me%output_agg_water__volume)
+        deallocate(me%output_agg_water__j_contaminant_foam)
+        deallocate(me%output_agg_water__j_contaminant_atmosphere)
         deallocate(me%output_agg_water__depth)
         deallocate(me%output_agg_water__flow)
         deallocate(me%output_agg_sediment__m_contaminant_total)

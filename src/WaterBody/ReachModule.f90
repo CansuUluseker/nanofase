@@ -114,7 +114,7 @@ module ReachModule
             DATASET%soilAttachmentEfficiencyConstant, DATASET%riverAttachmentEfficiency, &
             DATASET%estuaryAttachmentEfficiency, DATASET%contaminant_k_diss_pristine, &
             DATASET%contaminant_k_diss_transformed, DATASET%contaminant_k_transform_pristine, &
-            DATASET%waterTemperature(C%startDate%yearday())))
+            DATASET%waterTemperature(C%startDate%yearday()), x=me%x, y=me%y))
     end subroutine
 
 
@@ -144,8 +144,7 @@ module ReachModule
         integer      :: nxA, nyA, nxB, nyB
 
         ! Deposition calibration parameters, with grid->scalar fallback. Note that these
-        ! spatial variables use (x,y) indexing (they aren't transposed when retrieved from
-        ! the NetCDF file), in contrast to the soil spatial variables - see DataInputModule.
+        ! spatial variables use (x,y) indexing in contrast to the soil spatial variables.
         ! The scalar fallback is the value from the constants namelist, which itself defaults
         ! to defaultDepositionAlpha/Beta if not supplied.
         haveAlpha = .false.
@@ -263,7 +262,7 @@ module ReachModule
         integer :: nxA, nyA, nxB, nyB
         real(dp) :: alpha_bank_val, beta_bank_val
 
-        ! We need to use the sediment transport capacity to scale eroded sediment. Sediment transport
+        ! Use the sediment transport capacity to scale eroded sediment. Sediment transport
         ! capacity is stored in me%sedimentTransportCapacity and has units of kg/m2/timestep
         me%j_spm%soilErosion = me%scaleErosionBySedimentTransportCapacity(soilErosionYield, q_overland, contributingArea)
         ratio = divideCheckZero(sum(me%j_spm%soilErosion), sum(soilErosionYield))
@@ -324,11 +323,9 @@ module ReachModule
         type(Result)                :: rslt           !! The data object to return any errors in
         
         real(dp) :: spmDep_perArea(C%nSizeClassesSpm) ! The SPM to deposit, per unit area [kg/m2]
-        real(dp) :: spmRes_perArea(C%nSizeClassesSpm) ! The SPM resuspension, per unit area [kg/m2]
         type(Result0D) :: depositRslt                 !! Result from the bed sediment's deposit procedure
         real(dp) :: V_water_toDeposit                 !! Volume of water to deposit to bed sediment [m3/m2]
         type(FineSediment) :: fineSed(C%nSizeClassesSpm) ! FineSediment object to pass to BedSediment
-        type(Contaminant) :: j_contam_per_area        ! Temp object for flux per area
         integer :: n                                  ! Loop iterator
         integer, parameter :: sp = kind(1.0)          ! single precision kind for matching
 
@@ -361,29 +358,9 @@ module ReachModule
                 end select
             end if
 
-            ! --------------------------------------------------------------------------
-            ! FIX: Transfer Contaminant to Bed Sediment
-            ! --------------------------------------------------------------------------
-            
-            ! A. Update the Mass Transfer Coefficient Matrix
-            ! We need physical fluxes in [kg/m2]. 
-            ! spmDep_perArea is calculated above. 
-            ! We assume me%j_spm%resuspension contains total resuspension mass [kg].
-            spmRes_perArea = divideCheckZero(me%j_spm%resuspension, me%bedArea)
-            
-            call me%bedSediment%getmatrix(spmDep_perArea, spmRes_perArea)
-
-            ! B. Transfer the Contaminant Mass
-            ! BedSediment expects flux in [kg/m2] to match its internal state units.
-            ! me%j_contaminant_deposition is in [kg] (from Reactor volume).
-            call rslt%addErrors(.errors. j_contam_per_area%create())
-            call j_contam_per_area%add_scaled(me%j_contaminant_deposition, 1.0_dp / max(C%epsilon, me%bedArea))
-            
-            call rslt%addErrors(.errors. me%bedSediment%transferContaminant(j_contam_per_area))
-            
-            call j_contam_per_area%finalise()
-            ! --------------------------------------------------------------------------
-
+            ! The PFAS carried by the deposit is transferred by the caller (one
+            ! getMatrix + transferContaminant per displacement, after this call);
+            ! doing it here as well consumed the matrix before the caller's transfer.
         end if
 
         ! Clamp NaN / negative to zero

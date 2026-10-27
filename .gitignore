@@ -86,3 +86,7 @@ gprof
 
 # Docs
 docs/_build/
+
+# R local files
+.RData
+.Rhistory

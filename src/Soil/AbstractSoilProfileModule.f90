@@ -58,6 +58,10 @@ module AbstractSoilProfileModule
         type(Contaminant)       :: m_contaminant                       !! Total contaminant mass in profile [kg]
         type(Contaminant)       :: m_contaminant_in                    !! Contaminant deposited to profile on a time step [kg]
         type(Contaminant)       :: m_contaminant_buried                !! Cumulative contaminant "lost" from the bottom `SoilLayer` [kg]
+        type(Contaminant)       :: m_contaminant_surfaceRunoff         !! Dissolved PFAS exported with overland (surface) runoff on this time step [kg]
+        type(Contaminant)       :: m_contaminant_groundwater           !! PFAS held in the groundwater reservoir below the soil [kg]
+        type(Contaminant)       :: m_contaminant_baseflow              !! Dissolved PFAS discharged from the groundwater reservoir to surface water on this time step [kg]
+        real(dp)                :: gwResidenceTime = -1.0_dp           !! Groundwater reservoir residence time; <= 0 = no reservoir (leachate leaves the model) [s]
         type(Contaminant)       :: m_contaminant_eroded                !! Contaminant eroded on current timestep [kg]
       contains
         procedure(createAbstractSoilProfile), deferred :: create

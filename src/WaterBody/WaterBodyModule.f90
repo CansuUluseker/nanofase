@@ -9,9 +9,7 @@ module WaterBodyModule
     use BiotaWaterModule
     use FlowModule
     use ContaminantModule
-    use PFASEConstantsModule
-    use PFASEFoamModule, only: pfase_foam_fraction
-    use PFASEAtmosphereModule, only: pfase_first_order_fraction
+    use PFASConstantsModule
     implicit none
     
     !> WaterBodyPointer used for WaterBody inflows array, so the elements within can
@@ -86,6 +84,7 @@ module WaterBodyModule
         type(Contaminant)       :: j_contaminant_inflow
         type(Contaminant)       :: j_contaminant_outflow
         type(Contaminant)       :: j_contaminant_runoff
+        type(Contaminant)       :: j_contaminant_dissolvedRunoff    !! Dissolved PFAS from the land on this time step (overland runoff + baseflow) [kg]; set by the Environment before update, not emptied by emptyFlows
         type(Contaminant)       :: j_contaminant_transfers
         type(Contaminant)       :: j_contaminant_pointSources
         type(Contaminant)       :: j_contaminant_diffuseSources
@@ -114,7 +113,9 @@ module WaterBodyModule
         procedure :: parseNewBatchData => parseNewBatchDataWaterBody
         procedure :: get_m_contaminant => get_m_contaminant_WaterBody
         procedure :: get_C_contaminant => get_C_contaminant_WaterBody
-        procedure :: apply_surface_processes => applySurfaceProcessesWaterBody
+        procedure :: exchangePfasWithBed => exchangePfasWithBedWaterBody
+        procedure :: applyBedExchange => applyBedExchangeWaterBody
+        procedure :: recordSurfaceLosses => recordSurfaceLossesWaterBody
     end type
       
     !> Container type for `class(WaterBody)`, the actual type of the `WaterBody` class.
@@ -154,6 +155,7 @@ module WaterBodyModule
         call rslt%addErrors(.errors. me%j_contaminant_inflow%create())
         call rslt%addErrors(.errors. me%j_contaminant_outflow%create())
         call rslt%addErrors(.errors. me%j_contaminant_runoff%create())
+        call rslt%addErrors(.errors. me%j_contaminant_dissolvedRunoff%create())
         call rslt%addErrors(.errors. me%j_contaminant_transfers%create())
         call rslt%addErrors(.errors. me%j_contaminant_pointSources%create())
         call rslt%addErrors(.errors. me%j_contaminant_diffuseSources%create())
@@ -174,11 +176,27 @@ module WaterBodyModule
         type(Result) :: rslt
         ! We can't allocate contaminants until we know the number of point sources, which
         ! is calculated during GridCell%finaliseCreate. Hence this is done here
+        character(len=32) :: compartment
+        real(dp) :: G, velocity
         call me%allocateAndInitialise()
-        rslt = me%reactor%create( &
-            me%x, me%y, 'water', me%m_contaminant, me%volume, me%T_water(1), &
-            me%C_spm, me%W_settle_spm, 0.0_dp, velocity=0.0_dp &
-        )
+        ! allocateAndInitialise re-creates the contaminant store, so the initial state
+        ! is applied here rather than in the subclass create procedures
+        if (allocated(DATASET%initialContaminantConcsWater)) then
+            me%m_contaminant%c = DATASET%initialContaminantConcsWater(me%x, me%y, :, :, :)
+            call me%m_contaminant%clamp_negative()
+        end if
+        ! Re-point the reactor at the new store, keeping the compartment (water/estuary)
+        ! and shear rate the subclass created it with. Its physical state is refreshed
+        ! every time step via reactor%setState.
+        if (allocated(me%reactor)) then
+            compartment = me%reactor%compartment
+            G = me%reactor%G
+            velocity = me%reactor%velocity
+            rslt = me%reactor%create( &
+                me%x, me%y, trim(compartment), me%m_contaminant, me%volume, me%T_water(1), &
+                me%C_spm, me%W_settle_spm, G, velocity=velocity &
+            )
+        end if
     end subroutine
 
     subroutine finaliseWaterBody(me)
@@ -188,6 +206,7 @@ module WaterBodyModule
         call me%j_contaminant_inflow%finalise()
         call me%j_contaminant_outflow%finalise()
         call me%j_contaminant_runoff%finalise()
+        call me%j_contaminant_dissolvedRunoff%finalise()
         call me%j_contaminant_transfers%finalise()
         call me%j_contaminant_pointSources%finalise()
         call me%j_contaminant_diffuseSources%finalise()
@@ -296,52 +315,45 @@ module WaterBodyModule
             DATASET%soilAttachmentEfficiencyConstant, DATASET%riverAttachmentEfficiency, &
             DATASET%estuaryAttachmentEfficiency, DATASET%contaminant_k_diss_pristine, &
             DATASET%contaminant_k_diss_transformed, DATASET%contaminant_k_transform_pristine, &
-            real(DATASET%waterTemperature(1), dp))
+            real(DATASET%waterTemperature(1), dp), x=me%x, y=me%y)
     end subroutine
 
-    subroutine applySurfaceProcessesWaterBody(me, t, turbulence, dt)
+    !> Bed PFAS processes (porewater partitioning, transformation) and the dissolved
+    !! sediment-water exchange for this time step, against the whole water store.
+    subroutine exchangePfasWithBedWaterBody(me, dt)
         class(WaterBody), intent(inout) :: me
-        integer, intent(in) :: t
-        real(dp), intent(in) :: turbulence, dt
-        type(Contaminant) :: dj_foam, dj_air, dj_biota
-        type(Result) :: r
-        real(dp), allocatable :: uptake_fraction(:)
-        integer :: ib
-
-        if (C%ignoreContaminant) return
-        call r%addErrors(.errors. dj_foam%create())
-        call r%addErrors(.errors. dj_air%create())
-        call r%addErrors(.errors. dj_biota%create())
-
-        call me%m_contaminant%foam_exchange( &
-            pfase_foam_fraction(max(0.0_dp, DATASET%windSpeed), max(0.0_dp,turbulence), &
-                                DATASET%pfasFoamCoefficient, dt), dj_foam)
-        call me%m_contaminant%atmosphere_exchange( &
-            pfase_first_order_fraction(DATASET%pfasVolatilisationRateScalar, dt), &
-            pfase_first_order_fraction(DATASET%pfasSeaSprayAerosolRate, dt), dj_air)
-
-        call me%j_contaminant_foam%add(dj_foam)
-        call me%j_contaminant_atmosphere%add(dj_air)
-        call me%m_contaminant%add_scaled(dj_foam, -1.0_dp)
-        call me%m_contaminant%add_scaled(dj_air, -1.0_dp)
-
-        if (allocated(me%biota)) then
-            allocate(uptake_fraction(size(me%m_contaminant%c,1)))
-            uptake_fraction = 0.0_dp
-            do ib = 1, size(me%biota)
-                call r%addErrors(.errors. me%biota(ib)%update(t, me%m_contaminant%divideCheckZero(max(C%epsilon,me%volume))))
-                uptake_fraction = uptake_fraction + DATASET%pfasBioUptakeRateScalar * dt
-            end do
-            uptake_fraction = min(1.0_dp, uptake_fraction)
-            call me%m_contaminant%bioaccumulate(uptake_fraction, dj_biota)
-            call me%j_contaminant_biota%add(dj_biota)
-            call me%m_contaminant%add_scaled(dj_biota, -1.0_dp)
-            deallocate(uptake_fraction)
-        end if
-
-        call dj_foam%finalise(); call dj_air%finalise(); call dj_biota%finalise()
+        real(dp), intent(in) :: dt
+        type(Contaminant) :: dj_exchange
+        if (C%ignoreContaminant .or. .not. allocated(me%bedSediment)) return
+        call me%bedSediment%update_pfas(dt, me%m_contaminant, me%volume, me%bedArea, dj_exchange)
+        call me%applyBedExchange(dj_exchange)
+        call dj_exchange%finalise()
     end subroutine
 
+    !> Apply a dissolved sediment-water exchange package (PFAS_AQ slot, +ve water -> bed)
+    !! to the water store, and record it in the flux diagnostics: a net loss to the bed
+    !! in the AQ slot of j_contaminant_deposition (-ve), a net release from the bed in
+    !! the AQ slot of j_contaminant_resuspension (+ve).
+    subroutine applyBedExchangeWaterBody(me, dj_exchange)
+        class(WaterBody), intent(inout) :: me
+        type(Contaminant), intent(in) :: dj_exchange
+        if (.not. allocated(dj_exchange%c) .or. .not. allocated(me%m_contaminant%c)) return
+        me%m_contaminant%c(:,:,PFAS_AQ) = me%m_contaminant%c(:,:,PFAS_AQ) - dj_exchange%c(:,:,PFAS_AQ)
+        call me%m_contaminant%clamp_negative()
+        me%j_contaminant_deposition%c(:,:,PFAS_AQ) = me%j_contaminant_deposition%c(:,:,PFAS_AQ) &
+            - max(0.0_dp, dj_exchange%c(:,:,PFAS_AQ))
+        me%j_contaminant_resuspension%c(:,:,PFAS_AQ) = me%j_contaminant_resuspension%c(:,:,PFAS_AQ) &
+            + max(0.0_dp, -dj_exchange%c(:,:,PFAS_AQ))
+    end subroutine
+
+    !> Record the mass the reactor removed across the water surface on its last update
+    !! (foam export and volatilisation/aerosol), with the loss (-ve) convention.
+    subroutine recordSurfaceLossesWaterBody(me)
+        class(WaterBody), intent(inout) :: me
+        if (.not. allocated(me%reactor)) return
+        if (allocated(me%reactor%j_foam%c)) call me%j_contaminant_foam%add_scaled(me%reactor%j_foam, -1.0_dp)
+        if (allocated(me%reactor%j_air%c)) call me%j_contaminant_atmosphere%add_scaled(me%reactor%j_air, -1.0_dp)
+    end subroutine
 
     !> Add a point source to this WaterBody 
     subroutine addPointSourceWaterBody(me, index)

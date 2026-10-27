@@ -50,7 +50,7 @@ contains
             DATASET%contaminant_k_diss_pristine, &
             DATASET%contaminant_k_diss_transformed, &
             DATASET%contaminant_k_transform_pristine, &
-            DATASET%waterTemperature(C%startDate%yearday()) &
+            DATASET%waterTemperature(C%startDate%yearday()), x=me%x, y=me%y &
         ))
 
         call me%setDimensions(0)
@@ -137,18 +137,18 @@ contains
         call me%setDimensions((t-1) * C%timeStep / C%minEstuaryTimestep)
         changeInVolume = me%changeInVolume((t-1)*24, t*24)
         ! Provisional outflow, telling us the direction of the tide: +ve is upstream (incoming) tidal
-        ! flow, -ve is downstream. This must go in a local, NOT in me%Q%outflow: the displacement
+        ! flow, -ve is downstream. This must go in a local, not in me%Q%outflow: the displacement
         ! loop below accumulates dQ_out into me%Q%outflow, and since the accumulated total is this
-        ! same quantity, storing it here as well doubles the outflow
+        ! same quantity, storing it here doubles the outflow
         Q_outflow = changeInVolume - me%Q%inflow - me%Q%runoff - me%Q%transfers
         me%Q_in_total = me%Q%runoff + me%Q%transfers
         j_spm_in_total = me%j_spm%soilErosion + me%j_spm%transfers
-        ! Contaminant inputs are deliberately NOT tallied here. The displacement loop below adds
+        ! Contaminant inputs are deliberately not tallied here. The displacement loop below adds
         ! runoff, point sources, diffuse sources and the upstream inflow to me%m_contaminant via
         ! dj_contaminant_erosion_sources / dj_contaminant_inflow (each 1/nDisp of the timestep
         ! total, summed over nDisp displacements). Passing the same totals to reactor%update,
         ! which adds them to me%m_contaminant again through its pointer, would count every contaminant
-        ! input TWICE per timestep
+        ! input twice per timestep
         if (Q_outflow > 0) then
             me%Q_in_total = me%Q_in_total + Q_outflow
             j_spm_in_total = j_spm_in_total + me%j_spm%outflow
@@ -174,9 +174,12 @@ contains
         dj_spm_erosion = (me%j_spm%soilErosion + me%j_spm%bankErosion) / nDisp
         dj_spm_inflow = me%j_spm%inflow / nDisp
         call rslt%addErrors(.errors. dj_contaminant_erosion_sources%create())
-        call dj_contaminant_erosion_sources%multiply_scalar(j_contaminant_runoff, 1.0_dp/nDisp)
+        ! Eroded PFAS scaled by the sediment transport capacity (setErosionYields), as in
+        ! RiverReach, so it matches the eroded SPM that actually reaches the estuary
+        call dj_contaminant_erosion_sources%multiply_scalar(me%j_contaminant_soilErosion, 1.0_dp/nDisp)
         call dj_contaminant_erosion_sources%add_scaled(me%j_contaminant_pointSources, 1.0_dp/nDisp)
         call dj_contaminant_erosion_sources%add_scaled(me%j_contaminant_diffuseSources, 1.0_dp/nDisp)
+        call dj_contaminant_erosion_sources%add_scaled(me%j_contaminant_dissolvedRunoff, 1.0_dp/nDisp)
         call rslt%addErrors(.errors. dj_contaminant_inflow%create())
         call dj_contaminant_inflow%multiply_scalar(me%j_contaminant_inflow, 1.0_dp/nDisp)
 
@@ -190,11 +193,18 @@ contains
         ! Run the reactor's in-channel processes (partitioning, transformation, foam, atmosphere).
         ! No inflow flux is passed: the displacement loop has already added every contaminant
         ! input to me%m_contaminant, and reactor%update would add them a second time.
-        ! Pass the FULL timestep, not the per-displacement dt: this is called once per timestep,
+        ! Pass the full timestep, not the per-displacement dt: this is called once per timestep,
         ! after the displacement loop, so dt = C%timeStep / nDisp applied the reactor's rate
-        ! processes over only 1/nDisp of the timestep. RiverReach passes C%timeStep here too.
+        ! processes over only 1/nDisp of the timestep. 
         if (.not. C%ignoreContaminant .and. .not. isZero(me%volume)) then
+            ! Bed porewater partitioning/transformation and the dissolved
+            ! sediment-water exchange, once per time step
+            call me%exchangePfasWithBed(real(C%timeStep, dp))
+            ! Refresh the reactor's copies of this step's volume, SPM, settling,
+            ! temperature and surface (air-water interface) area before it runs
+            call me%reactor%setState(me%volume, T_water_t, me%C_spm, me%W_settle_spm, me%surfaceArea)
             call rslt%addErrors(.errors. me%reactor%update(dt=real(C%timeStep, dp)))
+            call me%recordSurfaceLosses()
             ! me%reactor%contaminant IS a pointer to me%m_contaminant, so no copy is needed.
             if (me%volume > 0.0_dp) then
                 me%C_dissolved = me%m_contaminant%m_dissolved / me%volume
@@ -207,14 +217,11 @@ contains
         call dj_contaminant_inflow%finalise()
 
         do i = 1, me%nBiota
+            ! Dietary exposure from the prey's current burden (food web)
+            call update_diets(me%biota)
             call rslt%addErrors(.errors. me%biota(i)%update(t, me%m_contaminant%divideCheckZero(me%volume)))
         end do
 
-        ! NOTE: do NOT call me%finaliseUpdate() here. The _final flow objects exist precisely so
-        ! that downstream reaches route on the PREVIOUS timestep's outflow; Environment%update
-        ! publishes them for every reach only after all reaches have been updated. Calling it here
-        ! publishes this reach's outflow immediately, so any downstream reach updates later in the
-        ! same timestep reads this timestep's outflow as its inflow.
         call rslt%addToTrace("Updating " // trim(me%ref) // " on timestep #" // trim(str(t)))
         call LOGR%toFile(errors = .errors. rslt)
         call ERROR_HANDLER%trigger(errors = .errors. rslt)
@@ -240,8 +247,7 @@ contains
         real(dp) :: tmp_dj_spm_resus_perArea(C%nSizeClassesSpm)
         type(Contaminant) :: dj_contaminant_deposit, dj_contaminant_resus
         type(Result) :: rslt
-        type(Result0D) :: res_contaminant
-        type(Contaminant) :: m_contaminant
+        type(Contaminant) :: dj_contaminant_deposit_perArea
 
         call rslt%addErrors(.errors. dj_contaminant_out%create())
         call rslt%addErrors(.errors. dj_contaminant_in%create())
@@ -295,6 +301,9 @@ contains
         me%m_spm = flushToZero(max(me%m_spm + dj_spm_in - dj_spm_outflow, 0.0_dp))
         call me%m_contaminant%add(dj_contaminant_in)
         call me%m_contaminant%add_scaled(dj_contaminant_out, -1.0_dp)
+        ! dj_contaminant_in can be net-negative on an incoming tide (mass pushed back
+        ! upstream); flush any resulting FP-noise negatives on the canonical store
+        call me%m_contaminant%clamp_negative()
 
         dj_spm_resus = me%k_resus * me%bedSediment%Mf_bed_by_size() * dt
 
@@ -309,25 +318,27 @@ contains
             ! want the perArea version here
             call rslt%addErrors(.errors. me%depositToBed(dj_spm_deposit))
             if (.not. C%ignoreContaminant) then
-                call dj_contaminant_deposit%multiply_scalar(me%m_contaminant, sum(me%k_settle * dt))
-                res_contaminant = me%bedSediment%get_m_contaminant()
-                if (res_contaminant%hasError()) then
-                    call rslt%addErrors(res_contaminant%getErrors())
-                    call LOGR%toFile(errors = .errors. rslt)
-                    call ERROR_HANDLER%trigger(errors = .errors. rslt)
-                    return
+                ! SPM-sorbed contaminant deposits in proportion to the SPM mass
+                ! deposited (PFAS_SPM slot package) and is removed from the water
+                call me%m_contaminant%deposition(divideCheckZero(sum(dj_spm_deposit), sum(tpm_m_spm)), &
+                                                 dj_contaminant_deposit)
+                call me%m_contaminant%add_scaled(dj_contaminant_deposit, -1.0_dp)
+
+                ! One matrix per displacement: normalise delta_sed (filled with raw masses
+                ! by resuspend/deposit) into transfer coefficients, move the deposit into
+                ! the bed and the resuspended layers' PFAS into the resuspension pool,
+                ! then export that pool to the water (absolute kg)
+                call me%bedSediment%getmatrix(dj_spm_deposit_perArea, dj_spm_resus_perArea)
+                if (me%bedArea > C%epsilon) then
+                    dj_contaminant_deposit_perArea = dj_contaminant_deposit * (1.0_dp / me%bedArea)
+                else
+                    call rslt%addErrors(.errors. dj_contaminant_deposit_perArea%create())
                 end if
-                select type (data => res_contaminant%data)
-                    type is (Contaminant)
-                        m_contaminant = data
-                    class default
-                        call rslt%addError(ErrorInstance(code=106, message="Invalid data type in Result0D"))
-                        call LOGR%toFile(errors = .errors. rslt)
-                        call ERROR_HANDLER%trigger(errors = .errors. rslt)
-                        return
-                end select
-                call dj_contaminant_resus%multiply_scalar(m_contaminant, sum(me%k_resus * dt))
-                call rslt%addErrors(.errors. me%bedSediment%transferContaminant(dj_contaminant_deposit))
+                call rslt%addErrors(.errors. me%bedSediment%transferContaminant(dj_contaminant_deposit_perArea))
+                call rslt%addErrors(.errors. me%bedSediment%resuspend_spm(me%bedArea, dj_contaminant_resus))
+                call me%m_contaminant%add(dj_contaminant_resus)
+
+                call me%m_contaminant%clamp_negative()
             end if
         end if
 
@@ -342,6 +353,7 @@ contains
         call dj_contaminant_out%finalise()
         call dj_contaminant_in%finalise()
         call dj_contaminant_deposit%finalise()
+        call dj_contaminant_deposit_perArea%finalise()
         call dj_contaminant_resus%finalise()
 
         call rslt%addToTrace("Updating time displacement #" // trim(str(d)))

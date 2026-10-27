@@ -4,7 +4,7 @@ module DiffuseSourceModule
     use netcdf, only: nf90_fill_double
     use DataInputModule
     use ContaminantModule
-    use PFASEConstantsModule
+    use PFASConstantsModule
     implicit none
     private
     

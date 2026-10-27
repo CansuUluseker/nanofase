@@ -8,9 +8,10 @@ module GridCellModule
     use SoilProfileModule
     use RiverReachModule
     use EstuaryReachModule
+    use LakeSegmentModule
     use CropModule
     use ContaminantModule
-    use PFASEConstantsModule, only: PFAS_AQ, PFAS_SOL, PFAS_SPM, PFAS_AWI, PFAS_FOAM, PFAS_AIR
+    use PFASConstantsModule, only: PFAS_AQ, PFAS_SOL, PFAS_SPM, PFAS_AWI, PFAS_FOAM, PFAS_AIR
     implicit none
     ! P-FASE integration note: this module has been retained with its public API but is now coupled to PFAS phase pools via ContaminantModule.
 
@@ -81,10 +82,10 @@ module GridCellModule
         ! Allocate the object properties that need to be and set up defaults
         allocate(me%colSoilProfiles(1))
         allocate(me%j_contaminant_diffuseSource(2)) ! Two diffuse sources (soil, atmospheric)
-        if (me%aggregatedReachType == 'riv') then
-            comp_wat = 'water'
-        else
+        if (me%aggregatedReachType == 'est') then
             comp_wat = 'estuary'
+        else
+            comp_wat = 'water'
         end if
         rslt_temp = me%contaminant_water%create_from_data( &
             trim(comp_wat), &
@@ -251,6 +252,10 @@ module GridCellModule
                 allocate(RiverReach::me%colRiverReaches(i)%item)
             else if (me%reachTypes(i) == 'est') then
                 allocate(EstuaryReach::me%colRiverReaches(i)%item)
+            else if (me%reachTypes(i) == 'lak') then
+                allocate(LakeSegment::me%colRiverReaches(i)%item)
+            else if (me%reachTypes(i) == 'res') then
+                allocate(ReservoirSegment::me%colRiverReaches(i)%item)
             else
                 call rslt%addError(ErrorInstance( &
                     message="Trying to create waterbody of unknown type " // trim(me%reachTypes(i)) // "." &
@@ -312,7 +317,11 @@ module GridCellModule
             ! Loop through all SoilProfiles (only one for the moment), run their
             ! simulations and store the eroded sediment in this object
             ! TODO extend to multiple soil profiles
-            call r%addErrors(.errors. me%colSoilProfiles(1)%item%update(t, me%j_contaminant_diffuseSource(1)))
+            ! The soil receives both the areal soil source (1) and atmospheric wet/dry
+            ! deposition (2), each in [kg/m2/timestep]
+            temp_contaminant = me%j_contaminant_diffuseSource(1)
+            call temp_contaminant%add(me%j_contaminant_diffuseSource(2))
+            call r%addErrors(.errors. me%colSoilProfiles(1)%item%update(t, temp_contaminant))
             me%erodedSediment = me%colSoilProfiles(1)%item%erodedSediment
             ! Reaches will be updated separately in reach routing order, by the `Environment` object
         end if
@@ -395,6 +404,12 @@ module GridCellModule
         if (DATASET%isEstuary(me%x, me%y)) then
             me%reachTypes          = 'est'
             me%aggregatedReachType = 'est'
+        else if (C%includeLakes .and. DATASET%isReservoir(me%x, me%y)) then
+            me%reachTypes          = 'res'
+            me%aggregatedReachType = 'res'
+        else if (C%includeLakes .and. DATASET%isLake(me%x, me%y)) then
+            me%reachTypes          = 'lak'
+            me%aggregatedReachType = 'lak'
         else
             me%reachTypes          = 'riv'
             me%aggregatedReachType = 'riv'
@@ -771,7 +786,7 @@ module GridCellModule
     function get_C_contaminant_waterGridCell(me) result(cont)
         !! P-FASE: return volume-weighted surface-water concentration [kg m-3]
         !! by species/form/phase. AQ, SPM, AWI, FOAM, AIR phases are retained in
-        !! the Contaminant object; callers decide
+        !! the Contaminant object.
         class(GridCell)  :: me
         type(Contaminant) :: cont, tmp_mass, tmp_conc
         real(dp) :: vol, total_volume
@@ -779,7 +794,9 @@ module GridCellModule
         type(Result) :: rslt
         character(len=7) :: compstr
 
-        compstr = merge('water  ', 'estuary', me%aggregatedReachType /= 'riv')
+        ! Estuary cells use the estuary attachment efficiency; river and lake/reservoir
+        ! cells the river one.
+        compstr = merge('estuary', 'water  ', me%aggregatedReachType == 'est')
 
         rslt = cont%create_from_data(trim(compstr), &
             DATASET%contaminantDensity, DATASET%soilAttachmentEfficiencyConstant, &
@@ -1269,10 +1286,10 @@ end function
     end function get_C_dissolved_waterGridCell
 
 
-    !> Get PFAS exported through the soil bottom boundary to the external groundwater model.
-    !! Groundwater is not simulated internally in P-FASE; this getter exposes the
-    !! leaching/burial boundary flux accumulated by the soil profile for diagnostics
-    !! and optional one-way coupling.
+    !> Get PFAS leached through the soil bottom boundary on this time step (groundwater
+    !! recharge). With a groundwater residence time configured this recharges the
+    !! cell's groundwater reservoir, which discharges to its reaches as baseflow;
+    !! otherwise it leaves the model (e.g. for one-way coupling to a groundwater model).
     function get_j_contaminant_groundwaterGridCell(me) result(j_contaminant_groundwater)
         class(GridCell) :: me
         type(Contaminant) :: j_contaminant_groundwater

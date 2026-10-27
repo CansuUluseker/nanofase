@@ -64,8 +64,14 @@ module DefaultsModule
         ! Water
         logical             :: includeEstuary = .true.                  ! Should we model estuaries, or treat them as rivers?
         logical             :: includeBankErosion = .true.              ! Should we include the inflow of sediment from bank erosion?
+        logical             :: includeLakes = .true.                    ! Should we model lakes/reservoirs (where flagged in input data), or treat them as rivers?
         ! Soil
         logical             :: includeSoilErosion = .true.              ! Should we model soil erosion?
+        ! Hydrology input adapter
+        character(len=64)   :: hydrologyTotalRunoffVariable = 'runoff'      ! Input variable containing total runoff [m/timestep]
+        character(len=64)   :: hydrologySurfaceRunoffVariable = 'quickflow' ! Input variable containing surface (overland) runoff [m/timestep]
+        character(len=64)   :: hydrologySubsurfaceRunoffVariable = ''       ! Input variable containing subsurface runoff/baseflow [m/timestep]
+        real                :: hydrologySurfaceRunoffFraction = 0.0         ! Fraction of total runoff treated as surface runoff, when only total runoff is supplied [-]
     end type
     type(ConfigDefaultsType) :: configDefaults
 

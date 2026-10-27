@@ -4,10 +4,11 @@ module SoilLayerModule
     use UtilModule
     use AbstractSoilLayerModule
     use DataInputModule, only: DATASET
-    use PFASEConstantsModule, only: PFAS_AQ, PFAS_SOL, PFAS_AWI
+    use PFASConstantsModule, only: PFAS_AQ, PFAS_SOL, PFAS_AWI
     use BiotaSoilModule
     use datetime_module
     use ContaminantModule, only: Contaminant
+    use PFASParameterisationModule, only: pfas_soil_awi_specific_area, pfas_soil_awi_area
     implicit none
 
     !> `SoilLayer` is responsible for routing percolated water through
@@ -17,7 +18,6 @@ module SoilLayerModule
       contains
         procedure :: create => createSoilLayer
         procedure :: update => updateSoilLayer
-        procedure :: update_contaminant_state => updateContaminantStateSoilLayer
         procedure :: addPooledWater => addPooledWaterSoilLayer
         procedure :: erode => erodeSoilLayer
         procedure :: calculateBioturbationRate => calculateBioturbationRateSoilLayer
@@ -60,6 +60,9 @@ module SoilLayerModule
         me%d_grain = d_grain
         me%porosity = porosity
         me%earthwormDensity = earthwormDensity
+        ! Air-water interfacial area per bulk volume for PFAS adsorption, from the input
+        ! map or the soil texture (grain size, porosity); scaled by saturation each step
+        me%awiSpecificArea = pfas_soil_awi_specific_area(x, y, porosity, d_grain)
 
         ! Get water temperature for initialization (use first day of simulation)
         currentDate = C%startDate
@@ -76,7 +79,8 @@ module SoilLayerModule
             k_diss_pristine=DATASET%contaminant_k_diss_pristine, &
             k_diss_transformed=DATASET%contaminant_k_diss_transformed, &
             k_transform_pristine=DATASET%contaminant_k_transform_pristine, &
-            waterTemperature=T_water_t &
+            waterTemperature=T_water_t, &
+            x=me%x, y=me%y &
         ))
 
         ! Initialize other Contaminant objects
@@ -137,20 +141,7 @@ module SoilLayerModule
         type(Result) :: r                               !! The Result object to return any errors in
         real(dp) :: initial_V_w                         ! Initial V_w used for checking whether all water removed
         integer :: i                                    ! Iterators
-        type(datetime) :: currentDate                   ! Current date
-        real(dp) :: T_water_t                           ! Water temperature on the current timestep [deg C]
         real(dp) :: leach_fraction
-
-        ! NEW: zero SPM arrays with correct model dimension
-        real(dp) :: C_spm_zero(C%nSizeClassesSpm)
-        real(dp) :: W_settle_zero(C%nSizeClassesSpm)
-
-        C_spm_zero    = 0.0_dp
-        W_settle_zero = 0.0_dp
-
-        ! Get the current date to use to get the water temperature
-        currentDate = C%startDate + timedelta(t-1)
-        T_water_t = DATASET%waterTemperature(currentDate%yearday())
 
         call me%j_contaminant_perc%empty()
         call me%j_contaminant_in%empty()
@@ -177,19 +168,26 @@ module SoilLayerModule
             me%V_perc = 0.0_dp
         end if
 
+        ! PFAS partitioning between porewater, soil solids and the air-water interface,
+        ! before leaching so that this step's input is retained like the rest of the
+        ! store. Porewater V_w*area [m3] partitions against the layer's solid mass
+        ! (bulkDensity*area*depth [kg]); the interfacial area shrinks as the layer wets up.
+        call me%m_contaminant%partition_phases(real(C%timeStep, dp), &
+            max(C%epsilon, me%V_w * me%area), PFAS_SOL, &
+            max(C%epsilon, me%bulkDensity * me%area * me%depth), &
+            pfas_soil_awi_area(me%awiSpecificArea, me%V_w, me%V_sat, me%volume))
+
         if (me%V_perc > C%epsilon .and. me%V_w > C%epsilon) then
             leach_fraction = min(1.0_dp, max(0.0_dp, me%V_perc / me%V_w))
             call me%m_contaminant%leach(leach_fraction, me%j_contaminant_perc)
-            ! leach() already removes AQ mass from m_contaminant in the supplied ContaminantModule.
+            ! leach() removes the leached AQ mass from m_contaminant
             me%V_w = max(0.0_dp, me%V_w - me%V_perc)
         else
             me%V_perc = 0.0_dp
         end if
 
-        ! Update PFAS phase equilibrium/kinetics after hydrological movement.
-        call r%addErrors(.errors. me%m_contaminant%update( &
-            real(C%timeStep, dp), T_water_t, C_spm_zero, W_settle_zero, 0.0_dp, &
-            max(C%epsilon, me%V_w * me%area), 'soil'))
+        ! Precursor transformation, once per time step
+        call r%addErrors(.errors. me%m_contaminant%transformation(real(C%timeStep, dp)))
 
         if (me%V_w <= C%epsilon .and. initial_V_w > C%epsilon) then
             call r%addError(ErrorInstance(600, isCritical=.false., &
@@ -197,7 +195,11 @@ module SoilLayerModule
         end if
 
         do i = 1, me%nBiota
-            call r%addErrors(.errors. me%biota(i)%update(t, me%m_contaminant))
+            ! Exposure is a concentration (porewater, or per kg dry soil), not the layer's mass
+            ! Dietary exposure from the prey's current burden (food web)
+            call update_diets(me%biota)
+            call r%addErrors(.errors. me%biota(i)%update_soil(t, me%m_contaminant, &
+                me%V_w * me%area, me%bulkDensity * me%area * me%depth))
         end do
 
         me%m_contaminant%m_dissolved = sum(me%m_contaminant%c(:,:,PFAS_AQ))
@@ -205,30 +207,6 @@ module SoilLayerModule
 
         call r%addToTrace("Updating " // trim(me%ref) // " on time step #" // trim(str(t)))
     end function
-
-    !> Update the internal contaminant state (attachment, etc.) without handling water fluxes.
-    subroutine updateContaminantStateSoilLayer(me, T_water_t)
-        class(SoilLayer), intent(inout) :: me
-        real(dp), intent(in) :: T_water_t
-        type(Result) :: r
-        ! These are zero because we are only updating internal state, not adding fluxes
-        real(dp) :: C_spm_zero(C%nSizeClassesSpm)
-        real(dp) :: W_settle_zero(C%nSizeClassesSpm)
-        C_spm_zero = 0.0_dp
-        W_settle_zero = 0.0_dp
-
-        ! Call the generic contaminant update routine to perform attachment etc.
-        call r%addErrors(.errors. me%m_contaminant%update( &
-            real(C%timeStep, dp), T_water_t, C_spm_zero, W_settle_zero, 0.0_dp, &
-            max(C%epsilon, me%V_w * me%area), 'soil'))
-
-        me%m_contaminant%m_dissolved = sum(me%m_contaminant%c(:,:,PFAS_AQ))
-
-        if (r%hasCriticalError()) then
-            call r%addToTrace("Updating PFAS contaminant state in " // trim(me%ref))
-            call ERROR_HANDLER%trigger(errors=.errors.r)
-        end if
-    end subroutine
 
     !> Add a volume \( V_{\text{pool}} \) of pooled water to the layer.
     !! No percolation occurs as pooled water never really leaves the `SoilLayer`.

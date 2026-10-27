@@ -7,7 +7,7 @@ module GlobalsModule
     use ErrorCriteriaModule
     use ErrorInstanceModule
     use ResultModule, only: Result
-    use PFASEConstantsModule, only: PFAS_AQ, PFAS_SOL, PFAS_SPM, PFAS_AWI, PFAS_FOAM, PFAS_AIR, PFAS_NPHASES
+    use PFASConstantsModule, only: PFAS_AQ, PFAS_SOL, PFAS_SPM, PFAS_AWI, PFAS_FOAM, PFAS_AIR, PFAS_NPHASES
     implicit none
 
     ! Contaminant state constants
@@ -94,6 +94,15 @@ module GlobalsModule
         integer             :: minEstuaryTimestep               !! Minimum timestep (displacement) length for modelling estuarine dynamics [s]
         logical             :: includeEstuary                   !! Should we simulate an estuary, or treat everything as a river?
         logical             :: includeBankErosion               !! Should we simulate the inflow of sediment from bank erosion?
+        logical             :: includeLakes                     !! Should we simulate lakes/reservoirs where flagged in input data, or treat them as rivers?
+
+        ! Hydrology input adapter. These map whichever runoff components the input
+        ! dataset provides onto the total and surface runoff required by the model.
+        ! An empty variable name means "not provided by this dataset".
+        character(len=64)   :: hydrologyTotalRunoffVariable      !! Input variable containing total runoff [m/timestep]
+        character(len=64)   :: hydrologySurfaceRunoffVariable    !! Input variable containing surface (overland) runoff [m/timestep]
+        character(len=64)   :: hydrologySubsurfaceRunoffVariable !! Input variable containing subsurface runoff/baseflow [m/timestep]
+        real                :: hydrologySurfaceRunoffFraction    !! Fraction of total runoff treated as surface runoff, when only total runoff is supplied [-]
 
         ! Batch run
         integer                         :: nChunks = 1          !! Numbers of chunks to run
@@ -169,6 +178,8 @@ module GlobalsModule
         character(len=5) :: soil_pec_units, sediment_pec_units
         character(len=3) :: netcdf_write_mode
         character(len=32) :: output_hash
+        character(len=64) :: total_runoff_variable, surface_runoff_variable, subsurface_runoff_variable
+        real :: surface_runoff_fraction
         integer, allocatable :: n_timesteps_per_chunk(:)
         integer :: n_contaminant_size_classes
         integer :: n_contaminant_forms
@@ -219,6 +230,7 @@ module GlobalsModule
         logical :: bash_colors
         logical :: save_checkpoint_after_warm_up
         logical :: include_bank_erosion
+        logical :: include_lakes
         logical :: include_soil_erosion
         logical :: ignore_contaminant
 
@@ -239,8 +251,10 @@ module GlobalsModule
         namelist /steady_state/ run_to_steady_state, mode, delta
         namelist /soil/ soil_layer_depth, include_bioturbation, include_attachment, include_clay_enrichment, include_soil_erosion
         namelist /sediment/ spm_size_classes, include_bed_sediment, sediment_particle_densities, sediment_layer_depth
-        namelist /water/ min_stream_slope, min_estuary_timestep, include_estuary, include_bank_erosion
+        namelist /water/ min_stream_slope, min_estuary_timestep, include_estuary, include_bank_erosion, include_lakes
         namelist /sources/ include_point_sources
+        namelist /hydrology/ total_runoff_variable, surface_runoff_variable, subsurface_runoff_variable, &
+            surface_runoff_fraction
 
         ! Batch config namelists
         namelist /batch_config/ n_chunks, batch_description
@@ -280,9 +294,14 @@ module GlobalsModule
         ignore_contaminant = configDefaults%ignoreContaminant
         include_estuary = configDefaults%includeEstuary
         include_bank_erosion = configDefaults%includeBankErosion
+        include_lakes = configDefaults%includeLakes
         warm_up_period = configDefaults%warmUpPeriod
         bash_colors = configDefaults%bashColors
         include_soil_erosion = configDefaults%includeSoilErosion
+        total_runoff_variable = configDefaults%hydrologyTotalRunoffVariable
+        surface_runoff_variable = configDefaults%hydrologySurfaceRunoffVariable
+        subsurface_runoff_variable = configDefaults%hydrologySubsurfaceRunoffVariable
+        surface_runoff_fraction = configDefaults%hydrologySurfaceRunoffFraction
 
         ! P-FASE defaults. Negative values mean "not provided in config" and allow
         ! fallback to legacy n_contaminant_* settings for backward compatibility.
@@ -344,6 +363,10 @@ module GlobalsModule
         read(iouConfig, nml=sediment)
         read(iouConfig, nml=water)
         read(iouConfig, nml=sources)
+        ! The &hydrology group is optional and may appear anywhere in the file;
+        ! defaults (runoff/quickflow, fraction 0) are kept if it is absent.
+        rewind(iouConfig)
+        read(iouConfig, nml=hydrology, iostat=nmlIOStat)
         close(iouConfig)
 
         ! Store this data in the Globals variable
@@ -461,8 +484,14 @@ module GlobalsModule
         C%minEstuaryTimestep = min_estuary_timestep
         C%includeEstuary = include_estuary
         C%includeBankErosion = include_bank_erosion
+        C%includeLakes = include_lakes
         ! Sources
         C%includePointSources = include_point_sources
+        ! Hydrology input adapter
+        C%hydrologyTotalRunoffVariable = total_runoff_variable
+        C%hydrologySurfaceRunoffVariable = surface_runoff_variable
+        C%hydrologySubsurfaceRunoffVariable = subsurface_runoff_variable
+        C%hydrologySurfaceRunoffFraction = surface_runoff_fraction
 
         ! If this is batch run, then use the config options in the batch config file
         ! to override those given in the config file. Also set some variables about the
@@ -567,6 +596,17 @@ module GlobalsModule
                 'and at the end of the model run. Only the latter will be saved to file.', isCritical=.false.))
         end if
 
+
+        ! Hydrology input adapter
+        if (me%hydrologySurfaceRunoffFraction < 0.0 .or. me%hydrologySurfaceRunoffFraction > 1.0) then
+            call rslt%addError(ErrorInstance( &
+                message='Invalid config file value for &hydrology > surface_runoff_fraction. Must be between 0 and 1.'))
+        end if
+        if (len_trim(me%hydrologyTotalRunoffVariable) == 0 .and. len_trim(me%hydrologySurfaceRunoffVariable) == 0) then
+            call rslt%addError(ErrorInstance( &
+                message='Config file group &hydrology must name at least one of total_runoff_variable or ' // &
+                    'surface_runoff_variable. Total runoff is the minimum hydrological requirement.'))
+        end if
 
         ! P-FASE dimension checks
         if (me%nPFASSpecies < 1) then

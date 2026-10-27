@@ -1,0 +1,195 @@
+# ==============================================================================
+# nfdata CREATE CONFIG
+# Colne P-FASE, 2 km, 2019
+# UKCEH LCM2024 + CEH-GEAR daily rainfall
+# ==============================================================================
+#
+# CEH-GEAR is preprocessed by the accompanying R script because the current
+# nfdata workflow is most reliable with one raster per timestep.
+#
+# Run:
+#   nfdata create \
+#     /users/pollution/canulu/Desktop/nanofase/data.example/PFAS_data/config.colne.pfase.2km.2019.yaml
+#
+# ==============================================================================
+
+nanomaterial: PFAS_TEST_AQUEOUS_TRACER
+
+output:
+  nc_file: /users/pollution/canulu/Desktop/nanofase/data.example/PFAS_data/output/colne_pfase_2km_2019.nc
+
+  # nfdata generates this legacy-format constants file as part of `create`.
+  # The current P-FASE executable should instead use the hand-prepared
+  # constants_colne_pfase_2km_2019.nml supplied with this bundle.
+  constants_file: /users/pollution/canulu/Desktop/nanofase/data.example/PFAS_data/output/constants_nfdata_generated_DO_NOT_USE.nml
+
+constants_file: /users/pollution/canulu/Desktop/nanofase/data.example/PFAS_data/constants_nfdata_placeholder.yaml
+
+land_use_config: /users/pollution/canulu/Desktop/nanofase/data.example/PFAS_data/land_use_lcm2024.yaml
+
+root_dir: /users/pollution/canulu/Desktop/nanofase/data.example/PFAS_data/processed_2km/
+
+iso3: GBR
+
+time:
+  n: 365
+  dt: 86400
+  start_date: 2019-01-01
+
+# ------------------------------------------------------------------------------
+# Grid and routing
+# ------------------------------------------------------------------------------
+
+# nfdata should calculate a new 2 km D8 routing network from the 2 km DEM.
+condition_dem:
+  save_dem_to_path: /users/pollution/canulu/Desktop/nanofase/data.example/PFAS_data/output/dem_2km_conditioned.tif
+  # WhiteboxTools breach search distance, in cells.
+  # At 2 km resolution, 50 cells is already about 100 km.
+  dist: 50
+
+dem:
+  type: raster
+  path: <root_dir>dem_2km.tif
+  units: m
+  source: "HydroSHEDS 15 arc-second DEM, cropped to Colne and aggregated directly to EPSG:27700 2 km grid."
+  references: "HydroSHEDS DEM; original NanoFASE preprocessing source."
+
+# ------------------------------------------------------------------------------
+# Daily hydrology
+# ------------------------------------------------------------------------------
+
+# The R script reads CEH_GEAR_daily_GB_2019.nc and writes these 365 files.
+precip:
+  type: raster
+  path: <root_dir>precip/precip_{t}.tif
+  units: m/day
+  t_min: 0
+  source: "CEH-GEAR daily rainfall, 1 km, spatially averaged to Colne 2 km grid."
+
+# JULES 2019 production hydrology is converted from daily-mean kg m-2 s-1
+# to m/day and spatially averaged from the native 1 km GB grid to this exact
+# Colne 2 km model grid.
+#
+# P-FASE/NanoFASE mapping:
+#   runoff    <- JULES runoff (total gridbox runoff)
+#   quickflow <- JULES surf_roff (surface/overland runoff used by erosion)
+#   evap      <- positive JULES fqw_gb (surface moisture loss)
+#
+# The preprocessing script also retains JULES sub_surf_roff and drain under
+# processed_2km/jules_subsurface_runoff/ and processed_2km/jules_drainage/
+# for QA and future PFAS leaching extensions; they are not separate variables
+# in the current P-FASE DataInput interface.
+runoff:
+  type: raster
+  path: <root_dir>runoff/runoff_{t}.tif
+  units: m/day
+  t_min: 0
+  source: "JULES 2019 production run: daily mean gridbox runoff, 1 km to Colne 2 km by area mean."
+  references: "JULES hydrology run driven by 2019 CHESS-met forcing."
+
+quickflow:
+  type: raster
+  path: <root_dir>quickflow/quickflow_{t}.tif
+  units: m/day
+  t_min: 0
+  source: "JULES 2019 surf_roff: daily mean gridbox surface runoff, 1 km to Colne 2 km by area mean."
+  references: "JULES hydrology run driven by 2019 CHESS-met forcing."
+
+evap:
+  type: raster
+  path: <root_dir>evap/evap_{t}.tif
+  units: m/day
+  t_min: 0
+  source: "JULES 2019 fqw_gb: positive daily mean moisture flux from the surface; negative condensation/deposition values clipped to zero."
+  references: "JULES hydrology run driven by 2019 CHESS-met forcing."
+
+# ------------------------------------------------------------------------------
+# Soil
+# ------------------------------------------------------------------------------
+
+soil_bulk_density:
+  type: raster
+  path: <root_dir>soil_bulk_density.tif
+  units: kg/m**3
+
+soil_water_content_field_capacity:
+  type: raster
+  path: <root_dir>soil_water_content_field_capacity.tif
+  units: cm**3/cm**3
+
+soil_water_content_saturation:
+  type: raster
+  path: <root_dir>soil_water_content_saturation.tif
+  units: cm**3/cm**3
+
+soil_hydraulic_conductivity:
+  type: raster
+  path: <root_dir>soil_hydraulic_conductivity.tif
+  units: m/s
+
+soil_texture_sand_content:
+  type: raster
+  path: <root_dir>soil_texture_sand_content.tif
+  units: kg/kg
+
+soil_texture_clay_content:
+  type: raster
+  path: <root_dir>soil_texture_clay_content.tif
+  units: kg/kg
+
+soil_texture_silt_content:
+  type: raster
+  path: <root_dir>soil_texture_silt_content.tif
+  units: kg/kg
+
+soil_texture_coarse_frag_content:
+  type: raster
+  path: <root_dir>soil_texture_coarse_frag_content.tif
+  units: kg/kg
+
+soil_usle_c_factor:
+  type: raster
+  path: <root_dir>soil_usle_c_factor.tif
+
+soil_usle_ls_factor:
+  type: raster
+  path: <root_dir>soil_usle_ls_factor.tif
+
+soil_usle_p_factor:
+  type: raster
+  path: <root_dir>soil_usle_p_factor.tif
+
+# ------------------------------------------------------------------------------
+# UKCEH LCM2024 land cover
+# ------------------------------------------------------------------------------
+
+# This input remains at 25 m. nfdata uses land_use_lcm2024.yaml to map the
+# 21 UKCEH classes to NanoFASE classes and aggregates them to fractions in
+# each 2 km model grid cell.
+land_use:
+  type: raster
+  path: <root_dir>land_use_lcm2024_25m_colne.tif
+
+# Freshwater-only first run.
+is_estuary:
+  type: raster
+  path: <root_dir>is_estuary_2km.tif
+
+
+emissions_areal_water_pristine:
+  type: raster
+  path: <root_dir>pfas_test_emission_water.tif
+  units: kg/m**2/day
+
+# ------------------------------------------------------------------------------
+# Sediment calibration layers
+# ------------------------------------------------------------------------------
+#
+# Deliberately omitted from this first safe run. The R script writes the
+# available spatial layers into candidate_calibration_2km/ for later review.
+# Constants provide fallbacks for:
+#   bank erosion
+#   deposition
+#   resuspension
+#   sediment transport capacity
+# ------------------------------------------------------------------------------

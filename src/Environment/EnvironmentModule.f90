@@ -7,6 +7,7 @@ module EnvironmentModule
     use ResultModule
     use GridCellModule
     use ContaminantModule
+    use PFASConstantsModule, only: PFAS_SOL, PFAS_SPM
     use DataInputModule, only: DATASET
     use datetime_module, only: datetime, timedelta
     implicit none
@@ -259,7 +260,7 @@ module EnvironmentModule
         type(GridCellPointer) :: cell
         real(dp)              :: lengthRatio
         real(dp)              :: j_spm_runoff(C%nSizeClassesSpm)
-        type(Contaminant)     :: j_contaminant_runoff
+        type(Contaminant)     :: j_contaminant_runoff, j_eroded_retained
         type(Result)          :: r_cr      ! for create()
         character(len=256)    :: tr
 
@@ -279,10 +280,21 @@ module EnvironmentModule
                 return
             end if
 
+            r_cr = reach%item%j_contaminant_dissolvedRunoff%create()
             if (allocated(cell%item%colSoilProfiles)) then
                 call j_contaminant_runoff%multiply_scalar( &
                     cell%item%colSoilProfiles(1)%item%m_contaminant_eroded, &
                     lengthRatio )
+                ! PFAS sorbed to eroded soil is carried by that soil, which becomes SPM
+                ! in the water body; the water column only partitions/settles/advects
+                ! the SPM-sorbed slot
+                call j_contaminant_runoff%move_phase(PFAS_SOL, PFAS_SPM)
+                ! Dissolved PFAS from the land: overland runoff and groundwater baseflow,
+                ! shared between the cell's reaches like the eroded sediment
+                call reach%item%j_contaminant_dissolvedRunoff%multiply_scalar( &
+                    cell%item%colSoilProfiles(1)%item%m_contaminant_surfaceRunoff, lengthRatio)
+                call reach%item%j_contaminant_dissolvedRunoff%add_scaled( &
+                    cell%item%colSoilProfiles(1)%item%m_contaminant_baseflow, lengthRatio)
             end if
 
             ! now update the reach
@@ -294,6 +306,21 @@ module EnvironmentModule
                 j_contaminant_runoff  = j_contaminant_runoff, &
                 contributingArea      = cell%item%area * lengthRatio, &
                 isWarmUp              = isWarmUp )
+
+            ! Eroded soil the reach can't carry (beyond its sediment transport capacity)
+            ! stays on the land, so its PFAS goes back to the top soil layer rather than
+            ! being lost: what left the soil for this reach minus what the reach took in
+            if (allocated(cell%item%colSoilProfiles) .and. allocated(j_contaminant_runoff%c) &
+                .and. allocated(reach%item%j_contaminant_soilErosion%c)) then
+                r_cr = j_eroded_retained%create()
+                j_eroded_retained%c(:,:,PFAS_SPM) = max(0.0_dp, j_contaminant_runoff%c(:,:,PFAS_SPM) &
+                    - reach%item%j_contaminant_soilErosion%c(:,:,PFAS_SPM))
+                call j_eroded_retained%move_phase(PFAS_SPM, PFAS_SOL)
+                ! (m_contaminant_eroded is left as the gross eroded mass: the cell's
+                ! other reaches take their shares of it later in the routing order)
+                call cell%item%colSoilProfiles(1)%item%colSoilLayers(1)%item%m_contaminant%add(j_eroded_retained)
+                call j_eroded_retained%finalise()
+            end if
 
             call j_contaminant_runoff%finalise()
         end if

@@ -1,6 +1,6 @@
 !> Module container for the DataOutput class
 module DataOutputModule
-    use PFASEConstantsModule, only: PFAS_AQ, PFAS_SOL, PFAS_SPM, PFAS_AWI, PFAS_FOAM, PFAS_AIR
+    use PFASConstantsModule, only: PFAS_AQ, PFAS_SOL, PFAS_SPM, PFAS_AWI, PFAS_FOAM, PFAS_AIR
     use DefaultsModule, only: iouOutputSummary, iouOutputWater, &
         iouOutputSediment, iouOutputSoil, iouOutputSSD, iouOutputStats, iouOutputBiota
     use GlobalsModule, only: C, dp
@@ -11,6 +11,7 @@ module DataOutputModule
     use AbstractGridCellModule
     use RiverReachModule
     use EstuaryReachModule
+    use LakeSegmentModule
     use UtilModule
     use datetime_module
     use mo_netcdf
@@ -174,7 +175,7 @@ module DataOutputModule
         real(dp)            :: C_contaminant, C_dissolved, C_attached
         real(dp)            :: vol
         real(dp)            :: s_aq, s_sol, s_dep_aq, s_dep_sol, s_res_aq, s_res_sol
-        real(dp)            :: s_out_aq, s_out_sol
+        real(dp)            :: s_out_aq, s_out_sol, s_foam, s_air
         type(Result0D)      :: r
         character(len=256)  :: tr = "DataOutputModule.f90%updateWaterDataOutput"
 
@@ -186,6 +187,8 @@ module DataOutputModule
                     select type (reach)
                         type is (RiverReach);   reachType = 'riv'
                         type is (EstuaryReach); reachType = 'est'
+                        type is (LakeSegment);  reachType = 'lak'
+                        type is (ReservoirSegment); reachType = 'res'
                     end select
 
                     ! --- state ---
@@ -287,7 +290,9 @@ module DataOutputModule
                     end if
                     write(iouOutputWater, '(a)') trim(str(reach%volume)) &
                         // "," // trim(str(divideCheckZero(reach%volume, reach%bedArea))) // "," // &
-                        trim(str(reach%Q%outflow / C%timeStep))
+                        trim(str(reach%Q%outflow / C%timeStep)) // "," // &
+                        trim(str(total_or_zero(reach%j_contaminant_foam))) // "," // &
+                        trim(str(total_or_zero(reach%j_contaminant_atmosphere)))
 
                     call m_contaminant%finalise()
                 end associate
@@ -394,9 +399,16 @@ module DataOutputModule
                             trim(str(sum(cell%get_j_spm_outflow()))) // "," // &
                             trim(str(sum(cell%colRiverReaches(1)%item%j_spm%bankErosion))) // ","
                     end if
+                    s_foam = 0.0_dp
+                    s_air = 0.0_dp
+                    do w = 1, cell%nReaches
+                        s_foam = s_foam + total_or_zero(cell%colRiverReaches(w)%item%j_contaminant_foam)
+                        s_air = s_air + total_or_zero(cell%colRiverReaches(w)%item%j_contaminant_atmosphere)
+                    end do
                     write(iouOutputWater, '(a)') trim(str(cell%getWaterVolume())) // "," // &
                         trim(str(cell%getWaterDepth())) // "," // &
-                        trim(str(cell%get_Q_outflow() / C%timeStep))
+                        trim(str(cell%get_Q_outflow() / C%timeStep)) // "," // &
+                        trim(str(s_foam)) // "," // trim(str(s_air))
 
                     call m_contaminant%finalise()
                 end if
@@ -426,6 +438,8 @@ module DataOutputModule
                         select type (reach)
                             type is (RiverReach); reachType = 'riv'
                             type is (EstuaryReach); reachType = 'est'
+                            type is (LakeSegment); reachType = 'lak'
+                            type is (ReservoirSegment); reachType = 'res'
                         end select
                         
                         res_get = reach%bedSediment%get_m_contaminant()
@@ -901,6 +915,8 @@ module DataOutputModule
                     "m_spm_outflow(kg), m_spm_bank_erosion(kg): SPM fluxes (kg)"
             end if
             write(iouOutputWater, '(a)') "#\tvolume(m3), depth(m), flow(m3/s): volume (m3), depth (m), flow rate (m3/s)"
+            write(iouOutputWater, '(a)') "#\tm_contaminant_foam(kg), m_contaminant_atmosphere(kg): PFAS lost from the " // &
+                "water surface to foam and to the atmosphere (volatilisation, sea spray) on this time step; negative = loss"
         end if
         write(iouOutputWater, '(a)', advance='no') "t,datetime,x,y,easts,norths,"
         if (C%includeWaterbodyBreakdown) write(iouOutputWater, '(a)', advance='no') "w,"
@@ -919,7 +935,7 @@ module DataOutputModule
             write(iouOutputWater, '(a)', advance='no') "m_spm_erosion(kg),m_spm_dep(kg),m_spm_res(kg)," // &
                 "m_spm_inflow(kg),m_spm_outflow(kg),m_spm_bank_erosion(kg),"
         end if
-        write(iouOutputWater, '(a)') "volume(m3),depth(m),flow(m3/s)"
+        write(iouOutputWater, '(a)') "volume(m3),depth(m),flow(m3/s),m_contaminant_foam(kg),m_contaminant_atmosphere(kg)"
     end subroutine
 
     subroutine writeHeadersSedimentDataOutput(this)

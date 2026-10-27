@@ -1,0 +1,81 @@
+# ==============================================================================
+# Placeholder constants YAML used ONLY so `nfdata create` can complete.
+#
+# The runtime config points instead to:
+#   constants_colne_pfase_2km_2019.nml
+#
+# This file uses the standard NanoFASE/nfdata schema.
+# ==============================================================================
+
+nanomaterial:
+  nm_density: 1000.0
+  default_nm_size_distribution: [100]
+
+soil:
+  darcy_velocity: 9.0e-6
+  default_porosity: 0.456
+  hamaker_constant: 6.9e-21
+  particle_density: 2500.0
+  soil_attachment_efficiency: 0.0
+
+  erosivity_a1: 6.608
+  erosivity_a2: 0.5
+  erosivity_a3: 2.7
+  erosivity_b: 1.204
+
+  sediment_transport_a: 2.0e-9
+  sediment_transport_b: 0.0
+  sediment_transport_c: 0.2
+
+water:
+  river_meandering_factor: 0.0
+  estuary_meandering_factor: 0.0
+
+  resuspension_alpha: 0.003
+  resuspension_beta: 0.007
+  resuspension_alpha_estuary: 0.003
+  resuspension_beta_estuary: 0.007
+
+  deposition_alpha: 38.1
+  deposition_beta: 0.93
+  bank_erosion_alpha: 1.0e-9
+  bank_erosion_beta: 1.0
+
+  min_water_temperature: 4.0
+  max_water_temperature: 21.0
+  min_water_temperature_day_of_year: 32
+
+  river_attachment_efficiency: 0.0
+  estuary_attachment_efficiency: 0.0
+
+  k_diss_pristine: 0.0
+  k_diss_transformed: 0.0
+  k_transform_pristine: 0.0
+
+  # Estuary disabled in first run; placeholders only.
+  estuary_tidal_M2: 0.0
+  estuary_tidal_S2: 0.0
+  estuary_mouth_coords: [0.0, 0.0]
+  estuary_mean_depth_expA: 1.0
+  estuary_mean_depth_expB: 0.0
+  estuary_width_expA: 1.0
+  estuary_width_expB: 0.0
+
+sediment:
+  initial_mass: [0.02, 0.02, 0.32, 0.32, 0.32]
+  porosity: [0.8, 0.6, 0.4, 0.2]
+  fractional_composition_distribution: [0.5, 0.5]
+  default_spm_size_distribution: [50, 30, 10, 7, 3]
+  default_matrixembedded_distribution_to_spm: [20, 20, 20, 20, 20]
+  spm_density_by_size_class: [1700, 2600, 2600, 1700, 1300]
+
+earthworm_densities:
+  arable: 30
+  coniferous: 150
+  deciduous: 400
+  grassland: 250
+  heathland: 20
+  urban_capped: 0
+  urban_gardens: 150
+  urban_parks: 250
+  vertical_distribution: [50, 35, 15]

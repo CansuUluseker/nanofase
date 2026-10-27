@@ -11,7 +11,7 @@ module RiverReachModule
     use ReactorModule
     use BiotaWaterModule
     use ContaminantModule
-    use PFASEConstantsModule, only: PFAS_AQ
+    use PFASConstantsModule, only: PFAS_AQ
     implicit none
 
     !> The RiverReach type represents a segment of river within a grid cell
@@ -25,7 +25,6 @@ module RiverReachModule
         procedure :: setDimensions
         ! Data handlers
         procedure :: parseInputData => parseInputDataRiverReach
-        procedure :: updateSources
         ! Calculators
         procedure :: calculateWidth => calculateWidth
         procedure :: calculateDepth => calculateDepth
@@ -62,12 +61,9 @@ contains
             k_diss_pristine=DATASET%contaminant_k_diss_pristine, &
             k_diss_transformed=DATASET%contaminant_k_diss_transformed, &
             k_transform_pristine=DATASET%contaminant_k_transform_pristine, &
-            waterTemperature=DATASET%waterTemperature(C%startDate%yearday()) ))
+            waterTemperature=DATASET%waterTemperature(C%startDate%yearday()), x=me%x, y=me%y ))
 
-        if (allocated(DATASET%initialContaminantConcsWater)) then
-            me%m_contaminant%c = DATASET%initialContaminantConcsWater(me%x, me%y, :, :, :)
-            me%m_contaminant%m_dissolved = sum(me%m_contaminant%c(:,:,PFAS_AQ))
-        end if
+        ! The initial water state is applied in WaterBody%finaliseCreate
 
         ! Settling velocities for SPM size classes — prefer DATASET%spmDensityBySizeClass
         if (allocated(me%W_settle_spm)) deallocate(me%W_settle_spm)
@@ -127,52 +123,6 @@ contains
         call rslt%addToTrace('Creating ' // trim(me%ref))
         call LOGR%toFile("Creating " // trim(me%ref) // ": success")
     end function
-
-    subroutine updateSources(me, t)
-        class(RiverReach) :: me
-        integer :: t
-        integer :: p
-        type(Result) :: rslt
-        type(Contaminant) :: temp_contaminant
-
-        call rslt%addErrors(.errors. me%j_contaminant_pointSources%create())
-        do p = 1, DATASET%maxPointSources
-            call rslt%addErrors(.errors. temp_contaminant%create())
-            if (allocated(DATASET%emissionsPointWaterContaminant)) then
-                temp_contaminant%c = DATASET%emissionsPointWaterContaminant(me%x, me%y, t, p, :, :, :)
-            else
-                temp_contaminant%c = 0.0_dp
-            end if
-            if (allocated(DATASET%emissionsPointWaterDissolvedContaminant)) then
-                temp_contaminant%m_dissolved = DATASET%emissionsPointWaterDissolvedContaminant(me%x, me%y, t)
-            else
-                temp_contaminant%m_dissolved = 0.0_dp
-            end if
-            call me%j_contaminant_pointSources%add(temp_contaminant)
-            call temp_contaminant%finalise()
-        end do
-
-        call rslt%addErrors(.errors. me%j_contaminant_diffuseSources%create())
-        call rslt%addErrors(.errors. temp_contaminant%create())
-        if (allocated(DATASET%emissionsArealWaterContaminant)) then
-            temp_contaminant%c = DATASET%emissionsArealWaterContaminant(me%x, me%y, :, :, :)
-        else
-            temp_contaminant%c = 0.0_dp
-        end if
-        if (allocated(DATASET%emissionsArealWaterDissolvedContaminant)) then
-            temp_contaminant%m_dissolved = DATASET%emissionsArealWaterDissolvedContaminant(me%x, me%y)
-        else
-            temp_contaminant%m_dissolved = 0.0_dp
-        end if
-        ! Areal emissions are kg/m2/timestep, so must be scaled by the reach's surface
-        ! area to get kg/reach/timestep. Point sources above are already kg/point.
-        call me%j_contaminant_diffuseSources%add_scaled(temp_contaminant, me%surfaceArea)
-        call temp_contaminant%finalise()
-
-        call rslt%addToTrace("Updating sources for " // trim(me%ref) // " on timestep #" // trim(str(t)))
-        call LOGR%toFile(errors = .errors. rslt)
-        call ERROR_HANDLER%trigger(errors = .errors. rslt)
-    end subroutine
 
     !> Run the river reach simulation for this timestep
     subroutine updateRiverReach(me, t, q_runoff, q_overland, j_spm_runoff, j_contaminant_runoff, &
@@ -257,6 +207,7 @@ contains
         call dj_contaminant_in%add_scaled(me%j_contaminant_soilErosion,    1.0_dp / nDisp)
         call dj_contaminant_in%add_scaled(me%j_contaminant_pointSources,   1.0_dp / nDisp)
         call dj_contaminant_in%add_scaled(me%j_contaminant_diffuseSources, 1.0_dp / nDisp)
+        call dj_contaminant_in%add_scaled(me%j_contaminant_dissolvedRunoff, 1.0_dp / nDisp)
 
         ! ----------------------------------------------------------------------
         ! Run displacement physics
@@ -274,12 +225,21 @@ contains
             ! FIX: Reactor Update
             ! The contaminant MUST react/partition to attach to SPM.
             ! Reactor has a pointer to me%m_contaminant, so no set_state is needed.
+            ! Bed porewater partitioning/transformation and the dissolved
+            ! sediment-water exchange, once per time step
+            call me%exchangePfasWithBed(real(C%timeStep, dp))
+            ! Refresh the reactor's copies of this step's volume, SPM, settling,
+            ! temperature and surface (air-water interface) area before it runs
+            call me%reactor%setState(me%volume, T_water_t, me%C_spm, me%W_settle_spm, me%surfaceArea)
             call rslt%addErrors(.errors. me%reactor%update(dt=real(C%timeStep, dp)))
+            call me%recordSurfaceLosses()
         end if
 
         ! Biota update (uses current environmental concentration)
         do i = 1, me%nBiota
             c_env_contaminant = me%m_contaminant%divideCheckZero(me%volume)
+            ! Dietary exposure from the prey's current burden (food web)
+            call update_diets(me%biota)
             call rslt%addErrors(.errors. me%biota(i)%update(t, c_env_contaminant))
             call c_env_contaminant%finalise()
         end do
@@ -308,14 +268,13 @@ contains
         real(dp)            :: dj_spm_deposit_perArea(C%nSizeClassesSpm)
         real(dp)            :: dj_spm_deposit(C%nSizeClassesSpm)
         real(dp)            :: dj_spm_outflow(C%nSizeClassesSpm)
+        real(dp)            :: m_spm_preupdate(C%nSizeClassesSpm)
         real(dp)            :: k_outflow
 
         ! Contaminant bookkeeping
         type(Contaminant)   :: dj_contaminant_deposit
-        type(Contaminant)   :: dj_contaminant_resus
         type(Contaminant)   :: dj_contaminant_outflow
-        type(Contaminant)   :: m_contaminant
-        type(Contaminant)   :: cont_dep_spm, cont_resus_spm
+        type(Contaminant)   :: cont_resus_spm
         type(Contaminant)   :: j_contam_dep_perArea
         type(Result0D)      :: res_contaminant
 
@@ -331,8 +290,6 @@ contains
         ! Ensure local contaminant containers are allocated/zeroed
         call rslt%addErrors(.errors. dj_contaminant_outflow%create())
         call rslt%addErrors(.errors. dj_contaminant_deposit%create())
-        call rslt%addErrors(.errors. dj_contaminant_resus%create())
-        call rslt%addErrors(.errors. cont_dep_spm%create())
         call rslt%addErrors(.errors. cont_resus_spm%create())
         call rslt%addErrors(.errors. j_contam_dep_perArea%create())
 
@@ -341,6 +298,7 @@ contains
             ! WATER → WATER bookkeeping (SPM)
             ! ------------------------------------------------------------------
             k_outflow      = max(0.0_dp, min(1.0_dp, dQ / max(C%epsilon, me%volume)))
+            m_spm_preupdate = me%m_spm        ! SPM pool the outflow fraction is defined against
             dj_spm_outflow = min(flushToZero(me%m_spm * k_outflow), me%m_spm)
             dj_spm_deposit = flushToZero((me%m_spm + dj_spm_in) * me%k_settle * dt)
             dj_spm_deposit = min(dj_spm_deposit, me%m_spm + dj_spm_in)
@@ -371,7 +329,9 @@ contains
                 if (do_mb_check) then
                     call rslt%addErrors(.errors. w_before%create())
                     w_before = me%m_contaminant
-                    res_contaminant = me%bedSediment%get_m_contaminant()
+                    ! Use the TOTAL bed inventory (incl. scratch and buried pools) so
+                    ! that staging and burial don't register as mass-balance errors
+                    res_contaminant = me%bedSediment%get_m_contaminant_total()
                     if (res_contaminant%hasError()) then
                         call rslt%addErrors(res_contaminant%getErrors()); call LOGR%toFile(errors = .errors. rslt)
                         call ERROR_HANDLER%trigger(errors = .errors. rslt); return
@@ -388,32 +348,26 @@ contains
                 ! ------------------------------------------------------------------
                 ! WATER contaminant internal (outflow split + deposition/settling)
                 ! ------------------------------------------------------------------
+                ! m_spm must be the pre-update pool that dj_spm_outflow was computed
+                ! from, so the sorbed-phase outflow fraction matches the SPM outflow
                 call me%m_contaminant%outflow_split( &
                     k_outflow      = max(0.0_dp, min(1.0_dp, k_outflow)), &
                     dj_spm_outflow = dj_spm_outflow, &
-                    m_spm          = me%m_spm, &
+                    m_spm          = m_spm_preupdate, &
                     dj_out         = dj_contaminant_outflow )
 
-                call me%m_contaminant%deposition(dt, me%W_settle_spm, me%volume, dj_contaminant_deposit)
-
-                ! Legacy-style proxy resuspension term (scalar on current bed state)
-                res_contaminant = me%bedSediment%get_m_contaminant()
-                if (res_contaminant%hasError()) then
-                    call rslt%addErrors(res_contaminant%getErrors()); call LOGR%toFile(errors = .errors. rslt)
-                    call ERROR_HANDLER%trigger(errors = .errors. rslt); return
-                end if
-                select type (data2 => res_contaminant%data)
-                    type is (Contaminant)
-                        m_contaminant = data2
-                    class default
-                        call rslt%addError(ErrorInstance(code=106, message="Invalid data type in Result0D"))
-                        call LOGR%toFile(errors = .errors. rslt); call ERROR_HANDLER%trigger(errors = .errors. rslt)
-                        return
-                end select
-                dj_contaminant_resus = m_contaminant * sum(me%k_resus * dt)
+                ! SPM-sorbed PFAS deposits in proportion to the SPM mass deposited
+                call me%m_contaminant%deposition( &
+                    divideCheckZero(sum(dj_spm_deposit), sum(m_spm_preupdate + dj_spm_in)), &
+                    dj_contaminant_deposit)
 
                 ! ------------------------------------------------------------------
-                ! NEW: SPM-mediated coupling with the bed (FREE scavenging + co-movement)
+                ! Bed coupling: one matrix per displacement. getmatrix turns this
+                ! displacement's sediment moves (resuspension above, deposition in
+                ! depositToBed) into transfer coefficients; transferContaminant moves
+                ! the deposit into the bed and the resuspended layers' PFAS (sorbed and
+                ! porewater) into the resuspension pool; resuspend_spm exports that
+                ! pool to the water. Resuspension goes ONLY through this route.
                 ! ------------------------------------------------------------------
                 if (isZero(me%bedArea)) then
                     dj_spm_deposit_perArea = 0.0_dp
@@ -422,56 +376,41 @@ contains
                     dj_spm_deposit_perArea = dj_spm_deposit / me%bedArea
                     dj_spm_resus_perArea   = dj_spm_resus   / me%bedArea
                 end if
-
-                ! At the water–bed interface: scavenge FREE mass onto depositing SPM (returns
-                ! a deposited package and a package ready to resuspend next step)
-                call rslt%addErrors(.errors. me%bedSediment%deposit_spm( &
-                    dj_spm_deposit_perArea, me%bedArea, cont_dep_spm, cont_resus_spm))
-                call rslt%addErrors(.errors. me%bedSediment%resuspend_spm( &
-                    dj_spm_resus_perArea,   me%bedArea, cont_resus_spm))
-
-                ! ------------------------------------------------------------------
-                ! PATCH: drive bed sediment contaminant transfer (matrix + per-area deposit)
-                ! ------------------------------------------------------------------
                 call me%bedSediment%getmatrix(dj_spm_deposit_perArea, dj_spm_resus_perArea)
-
-                ! j_contam_dep_perArea = (direct settling) + (FREE scavenged at interface), per unit bed area
-                call j_contam_dep_perArea%add(dj_contaminant_deposit)
-                call j_contam_dep_perArea%add(cont_dep_spm)
                 if (me%bedArea > C%epsilon) then
-                    ! Use overloaded operator: Contaminant * scalar → Contaminant
-                    j_contam_dep_perArea = j_contam_dep_perArea * (1.0_dp / me%bedArea)
-                else
-                    ! no bed area; nothing to scale
+                    j_contam_dep_perArea = dj_contaminant_deposit * (1.0_dp / me%bedArea)
                 end if
-
                 call rslt%addErrors(.errors. me%bedSediment%transferContaminant(j_contam_dep_perArea))
+                call rslt%addErrors(.errors. me%bedSediment%resuspend_spm(me%bedArea, cont_resus_spm))
 
                 ! ------------------------------------------------------------------
-                ! Apply ALL contaminant flows to WATER storages/fluxes
+                ! Apply ALL contaminant flows to WATER storages/fluxes.
+                ! Deposition diagnostics keep the legacy -ve (loss) convention;
+                ! the outflow holder is stored POSITIVE, since downstream reaches
+                ! and grid cell getters accumulate it with a plain add.
                 ! ------------------------------------------------------------------
                 call me%j_contaminant_deposition%add_scaled(dj_contaminant_deposit, -1.0_dp)
-                call me%j_contaminant_resuspension%add(dj_contaminant_resus)
-                call me%j_contaminant_outflow%add_scaled(dj_contaminant_outflow, -1.0_dp)
+                call me%j_contaminant_outflow%add(dj_contaminant_outflow)
                 call me%m_contaminant%add(dj_contaminant_in)
                 call me%m_contaminant%add_scaled(dj_contaminant_deposit, -1.0_dp)
-                call me%m_contaminant%add(dj_contaminant_resus)
                 call me%m_contaminant%add_scaled(dj_contaminant_outflow, -1.0_dp)
-
-                ! Add the SPM-mediated bed packages (mirrors legacy nm behaviour)
-                call me%j_contaminant_deposition%add_scaled(cont_dep_spm, -1.0_dp)
                 call me%j_contaminant_resuspension%add(cont_resus_spm)
-                call me%m_contaminant%add_scaled(cont_dep_spm, -1.0_dp)
                 call me%m_contaminant%add(cont_resus_spm)
+                ! Flush FP noise on the canonical store (removals are bounded by
+                ! availability, so anything negative here is roundoff)
+                call me%m_contaminant%clamp_negative()
 
                 ! ------------------------------------------------------------------
-                ! MASS-BALANCE CHECK (per displacement) — keep here
+                ! MASS-BALANCE CHECK (per displacement)
                 ! lhs = inflows + resus − deposits − outflow  vs  Δstorage (water + bed)
+                ! The bed pools are per-area [kg/m2], so scale them by bedArea to
+                ! compare against absolute water masses. Fails loudly (non-critical
+                ! error) when the discrepancy exceeds tolerance.
                 ! ------------------------------------------------------------------
                 if (do_mb_check) then
                     ! Post-update storages
                     w_after = me%m_contaminant
-                    res_contaminant = me%bedSediment%get_m_contaminant()
+                    res_contaminant = me%bedSediment%get_m_contaminant_total()
                     if (res_contaminant%hasError()) then
                         call rslt%addErrors(res_contaminant%getErrors()); call LOGR%toFile(errors = .errors. rslt)
                     else
@@ -483,20 +422,23 @@ contains
                     end if
 
                     mb_in     = total_mass(dj_contaminant_in)
-                    mb_resus  = total_mass(dj_contaminant_resus)  + total_mass(cont_resus_spm)
-                    mb_dep    = total_mass(dj_contaminant_deposit)+ total_mass(cont_dep_spm)
+                    mb_resus  = total_mass(cont_resus_spm)
+                    mb_dep    = total_mass(dj_contaminant_deposit)
                     mb_out    = total_mass(dj_contaminant_outflow)
 
                     mb_delta   = mb_in + mb_resus - mb_dep - mb_out
-                    mb_storage = (total_mass(w_after) + total_mass(bed_after)) - &
-                                (total_mass(w_before) + total_mass(bed_before))
+                    mb_storage = (total_mass(w_after) + total_mass(bed_after) * me%bedArea) - &
+                                 (total_mass(w_before) + total_mass(bed_before) * me%bedArea)
 
-                    call LOGR%toFile( &
-                        "MB (reach "//trim(me%ref)//", disp "//trim(str(d))//"): " // &
-                        "in=" // trim(str(mb_in)) // ", resus=" // trim(str(mb_resus)) // &
-                        ", dep=" // trim(str(mb_dep)) // ", out=" // trim(str(mb_out)) // &
-                        " | lhs=" // trim(str(mb_delta)) // ", dStorage=" // trim(str(mb_storage)) // &
-                        ", diff=" // trim(str(mb_delta - mb_storage)) )
+                    if (abs(mb_delta - mb_storage) > max(1.0e-9_dp, 1.0e-6_dp * abs(mb_storage))) then
+                        call rslt%addError(ErrorInstance(code=902, isCritical=.false., message= &
+                            "Contaminant mass balance failure in " // trim(me%ref) // &
+                            " (t=" // trim(str(t)) // ", disp=" // trim(str(d)) // "): " // &
+                            "in=" // trim(str(mb_in)) // ", resus=" // trim(str(mb_resus)) // &
+                            ", dep=" // trim(str(mb_dep)) // ", out=" // trim(str(mb_out)) // &
+                            " | lhs=" // trim(str(mb_delta)) // ", dStorage=" // trim(str(mb_storage)) // &
+                            ", diff=" // trim(str(mb_delta - mb_storage)) ))
+                    end if
                 end if
                 ! ------------------------------------------------------------------
 
@@ -506,57 +448,14 @@ contains
             me%m_spm = 0.0_dp
             call me%m_contaminant%empty()
         end if
-  
-        ! ------------------------------------------------------------------
-        ! Mass-balance diagnostic
-        ! ------------------------------------------------------------------
-        if (do_mb_check) then
-            call rslt%addErrors(.errors. w_after%create())
-            call rslt%addErrors(.errors. bed_after%create())
-            call w_after%add(me%m_contaminant)
-            res_contaminant = me%bedSediment%get_m_contaminant()
-            if (.not. res_contaminant%hasError()) then
-                select type (data2 => res_contaminant%data)
-                    type is (Contaminant)
-                        call bed_after%add(data2)
-                    class default
-                        call rslt%addError(ErrorInstance(code=106, message="Invalid data type in get_m_contaminant()"))
-                end select
-            else
-                call rslt%addErrors(res_contaminant%getErrors())
-            end if
-
-
-            mb_in     = total_mass(dj_contaminant_in)
-            mb_resus  = total_mass(dj_contaminant_resus)
-            mb_dep    = total_mass(dj_contaminant_deposit)
-            mb_out    = total_mass(dj_contaminant_outflow)
-            mb_delta  = (mb_in + mb_resus) - (mb_dep + mb_out)
-            mb_storage = ( total_mass(w_after) + total_mass(bed_after) ) - &
-                         ( total_mass(w_before) + total_mass(bed_before) )
-
-            if (abs(mb_delta - mb_storage) > 1.0e-8_dp) then
-                call rslt%addToTrace( &
-                    "MB RiverReach "//trim(me%ref)//" t="//trim(str(t))// &
-                    " disp="//trim(str(d))//": " // &
-                    "in="      // trim(str(mb_in))      // ", resus=" // trim(str(mb_resus)) // &
-                    ", dep="   // trim(str(mb_dep))     // ", out="   // trim(str(mb_out))    // &
-                    " | lhs=" // trim(str(mb_delta)) // ", dStorage=" // trim(str(mb_storage)) // &
-                    ", diff=" // trim(str(mb_delta - mb_storage)) )
-            end if
-
-            call w_before%finalise()
-            call bed_before%finalise()
-            call w_after%finalise()
-            call bed_after%finalise()
-        end if
-        ! -----------------------------------------------------------------
 
         ! Finalise locals
+        call w_before%finalise()
+        call bed_before%finalise()
+        call w_after%finalise()
+        call bed_after%finalise()
         call dj_contaminant_outflow%finalise()
         call dj_contaminant_deposit%finalise()
-        call dj_contaminant_resus%finalise()
-        call cont_dep_spm%finalise()
         call cont_resus_spm%finalise()
         call j_contam_dep_perArea%finalise()
 
@@ -569,10 +468,12 @@ contains
         pure function total_mass(cont) result(m)
             type(Contaminant), intent(in) :: cont
             real(dp) :: m
+            ! m_dissolved is an alias for sum(c(:,:,PFAS_AQ)), which is already
+            ! inside sum(c); adding it here would double-count the aqueous phase
             if (allocated(cont%c)) then
-                m = sum(cont%c) + cont%m_dissolved
+                m = sum(cont%c)
             else
-                m = cont%m_dissolved
+                m = 0.0_dp
             end if
         end function total_mass
     end subroutine updateDisplacementRiverReach

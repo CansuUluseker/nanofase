@@ -7,7 +7,7 @@ module BiotaWaterModule
     use datetime_module
     use ContaminantModule
     use UtilModule, only: str
-    use PFASEConstantsModule, only: PFAS_AQ, PFAS_SPM, PFAS_AWI
+    use PFASConstantsModule, only: PFAS_AQ, PFAS_SPM, PFAS_AWI
     implicit none
 
     type, public, extends(AbstractBiota) :: BiotaWater
@@ -80,24 +80,26 @@ contains
             do i = 1, nSpecies
                 lambda_active = max(0.0_dp, me%k_elim(i) + me%k_growth + me%k_death)
                 if (lambda_active > C%epsilon) then
-                    target_active(i) = me%k_uptake(i) * (1.0_dp - me%storedFraction) * exposure(i) / lambda_active
+                    target_active(i) = me%uptake(i, exposure(i)) * (1.0_dp - me%storedFraction) / lambda_active
                     me%C_active(i) = target_active(i) + (me%C_active(i) - target_active(i)) * &
                                      exp(-lambda_active * dt_days)
                 else
                     me%C_active(i) = me%C_active(i) + &
-                                     me%k_uptake(i) * (1.0_dp - me%storedFraction) * exposure(i) * dt_days
+                                     me%uptake(i, exposure(i)) * (1.0_dp - me%storedFraction) * dt_days
                 end if
 
                 lambda_stored = max(0.0_dp, me%k_growth + me%k_death)
                 if (lambda_stored > C%epsilon) then
-                    target_stored(i) = me%k_uptake(i) * me%storedFraction * exposure(i) / lambda_stored
+                    target_stored(i) = me%uptake(i, exposure(i)) * me%storedFraction / lambda_stored
                     me%C_stored(i) = target_stored(i) + (me%C_stored(i) - target_stored(i)) * &
                                      exp(-lambda_stored * dt_days)
                 else
                     me%C_stored(i) = me%C_stored(i) + &
-                                     me%k_uptake(i) * me%storedFraction * exposure(i) * dt_days
+                                     me%uptake(i, exposure(i)) * me%storedFraction * dt_days
                 end if
             end do
+            ! Metabolism of precursors in the organism
+            call me%transformBurden(dt_days)
         end if
 
         deallocate(exposure, target_active, target_stored)

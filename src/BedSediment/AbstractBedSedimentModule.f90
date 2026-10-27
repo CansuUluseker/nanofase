@@ -1,6 +1,6 @@
 !> Module containing definition of abstract superclass `AbstractBedSediment`.
 module AbstractBedSedimentModule
-    use PFASEConstantsModule, only: PFAS_AQ, PFAS_SOL, PFAS_SPM, PFAS_AWI, PFAS_FOAM, PFAS_AIR, PFAS_NPHASES
+    use PFASConstantsModule, only: PFAS_AQ, PFAS_SOL, PFAS_SPM, PFAS_AWI, PFAS_FOAM, PFAS_AIR, PFAS_NPHASES
     use GlobalsModule
     use mo_netcdf
     use ResultModule, only: Result, Result0D, Result3D
@@ -8,6 +8,7 @@ module AbstractBedSedimentModule
     use AbstractBedSedimentLayerModule
     use FineSedimentModule
     use ContaminantModule
+    use DataInputModule, only: DATASET
     use Spoof
     implicit none                                                    ! force declaration of all variables
     !> Type definition for polymorphic `BedSedimentLayer` container,
@@ -32,6 +33,7 @@ module AbstractBedSedimentModule
         integer                         :: nfComp                               !! number of fractional composition terms for sediment
         ! Contaminants
         type(Contaminant), allocatable :: m_contaminant(:)                     !! Contaminant objects for deposition, resuspension, layers 1 to N, and burial
+        real(dp), allocatable :: A_pfas(:,:)                                    !! PFAS transfer matrix (layers + 3)^2, delta_sed aggregated over size classes by sediment mass
     contains
         procedure(createBedSediment), deferred :: create            ! constructor method
         procedure(destroyBedSediment), deferred :: destroy          ! finaliser method
@@ -40,7 +42,6 @@ module AbstractBedSedimentModule
         procedure(ReportBedMassToConsole), deferred :: repMass      ! report fine sediment masses to the console
         procedure(FinaliseMTCMatrix), deferred :: getMatrix         ! finalise mass transfer coefficient matrix
         procedure(transferContaminantBedSediment), deferred :: transferContaminant    ! Transfer Contaminant masses between layers and to/from water body, using mass transfer coef matrix
-        procedure(deposit_spm),   deferred :: deposit_spm
         procedure(resuspend_spm), deferred :: resuspend_spm
         procedure :: Af_sediment => Get_Af_sediment          ! fine sediment available capacity for size class
         procedure :: Cf_sediment => Get_Cf_sediment          ! fine sediment capacity for size class
@@ -54,6 +55,7 @@ module AbstractBedSedimentModule
         procedure :: V_w_by_layer => get_V_w_by_layer        ! total water volume in each layer
         ! Getters
         procedure :: get_m_contaminant
+        procedure :: get_m_contaminant_total
         procedure :: get_C_contaminant
         procedure :: get_C_contaminant_byMass
         procedure :: get_m_contaminant_l
@@ -65,6 +67,7 @@ module AbstractBedSedimentModule
         procedure :: get_C_pfas_sorbed_byMass
         procedure :: get_C_pfas_layer_aqueous
         procedure :: get_C_pfas_layer_sorbed_byMass
+        procedure :: update_pfas => update_pfas_bed
         procedure :: finalise => finaliseBedSediment
     end type
 
@@ -129,24 +132,13 @@ module AbstractBedSedimentModule
             type(Result) :: r
         end function
 
-        function deposit_spm(Me, dj_spm_deposit, bedArea, out_deposit, out_resus) result(r)
+        function resuspend_spm(Me, bedArea, out_resus) result(r)
             use GlobalsModule, only: dp
             import AbstractBedSediment, Contaminant, Result
             class(AbstractBedSediment), intent(inout) :: Me
-            real(dp), intent(in) :: dj_spm_deposit(:)
             real(dp), intent(in) :: bedArea
-            type(Contaminant), intent(out) :: out_deposit
-            type(Contaminant), intent(out) :: out_resus
-            type(Result) :: r
-        end function
-
-        function resuspend_spm(Me, dj_spm_resus, bedArea, out_resus) result(r)
-            use GlobalsModule, only: dp
-            import AbstractBedSediment, Contaminant, Result
-            class(AbstractBedSediment), intent(inout) :: Me
-            real(dp), intent(in) :: dj_spm_resus(:)
-            real(dp), intent(in) :: bedArea
-            type(Contaminant), intent(out) :: out_resus
+            ! intent(inout): accumulates into any package the caller already holds
+            type(Contaminant), intent(inout) :: out_resus
             type(Result) :: r
         end function
 
@@ -187,19 +179,8 @@ module AbstractBedSedimentModule
             !
             ! Function outputs/outcomes
             ! -------------------------------------------------------------------------------
-            !
-            ! Notes
-            ! -------------------------------------------------------------------------------
-            ! 1.    Currently does not account fully for sediment burial, in the sense that
-            !       it does not tally mass, volume and composition of buried material. This
-            !       will need to be added before burial losses of a chemical vector can be
-            !       computed.
-            !       ACTION: add code to mix FineSediments together and return a single
-            !       FineSediment object. This code can be used to tally up the sediment that
-            !       is lost through burial.
-            ! 2.    The FineSediment objects in D should not contain any water, but if they
-            !       do it is not a problem as it will be overwritten.
-            ! -------------------------------------------------------------------------------
+            !Need to check
+            
         end function
 
         !> Function purpose
@@ -541,7 +522,7 @@ module AbstractBedSedimentModule
             end do
         end do
 
-        ! Mf(s) is already kg/m2 (mass per area), so don't divide by bedArea again
+        ! Mf(s) is already kg/m2 (mass per area)
     end function
 
 
@@ -561,6 +542,31 @@ module AbstractBedSedimentModule
             return
         end if
         do i = 3, C%nSedimentLayers+2
+            call m_contaminant%add(me%m_contaminant(i))
+        end do
+        allocate(r%data, source=m_contaminant)
+        call r%setErrors()
+    end function
+
+    !> Total contaminant inventory of the bed, including the scratch inlet/outlet
+    !! pools and the buried pool [kg/m2]. Use this for mass-balance accounting,
+    !! where staged and buried mass must still count as bed storage.
+    function get_m_contaminant_total(me) result(r)
+        class(AbstractBedSediment), intent(in) :: me
+        type(Result0D) :: r
+        type(Contaminant) :: m_contaminant
+        type(Result) :: res
+        integer :: i
+        if (.not. allocated(me%m_contaminant)) then
+            call r%addError(ErrorInstance(code=105, message="Contaminant array not allocated"))
+            return
+        end if
+        res = m_contaminant%create()
+        if (res%hasCriticalError()) then
+            call r%addErrors(res%getErrors())
+            return
+        end if
+        do i = 1, size(me%m_contaminant)
             call m_contaminant%add(me%m_contaminant(i))
         end do
         allocate(r%data, source=m_contaminant)
@@ -635,12 +641,11 @@ module AbstractBedSedimentModule
                     return
             end select
             
-            ! FIX: Accumulate Total Contaminant Mass [kg], not Concentration
-            ! Previously: C_contaminant_byMass + m_contaminant_l%c / layerMasses(i) (INCORRECT)
+            ! Accumulate Total Contaminant Mass [kg], not Concentration
             C_contaminant_byMass = C_contaminant_byMass + m_contaminant_l%c 
         end do
         
-        ! FIX: Divide Total Contaminant Mass by Total Sediment Mass
+        ! Divide Total Contaminant Mass by Total Sediment Mass
         if (sum(layerMasses) > C%epsilon) then
             C_contaminant_byMass = C_contaminant_byMass / sum(layerMasses)
         else
@@ -957,5 +962,96 @@ module AbstractBedSedimentModule
         if (allocated(me%colBedSedimentLayers)) deallocate(me%colBedSedimentLayers)
         if (allocated(me%delta_sed)) deallocate(me%delta_sed)
         if (allocated(me%delta_sed_csr)) deallocate(me%delta_sed_csr)
+        if (allocated(me%A_pfas)) deallocate(me%A_pfas)
     end subroutine
+
+    !> PFAS processes within the bed over one time step, after the sediment
+    !! transfers of the step: (1) partitioning between porewater (PFAS_AQ) and bed
+    !! solids (PFAS_SOL) in every layer, using the cell's sediment Kd; (2) precursor
+    !! transformation with the bed's (anoxic) rates; (3) exchange of dissolved PFAS
+    !! between the overlying water and the top layer's porewater across the
+    !! sediment-water interface. The exchange is a first-order mass transfer,
+    !! J = k*(C_w - C_pw)*A, solved exactly for the two boxes over dt so it is stable
+    !! and cannot overshoot. k is the sediment-water exchange velocity if given, else
+    !! phi*D_s/(dz/2), with D_s = D/(1 - 2 ln phi) (Boudreau 1997), porosity phi from
+    !! the top layer's water content and dz its depth. Where sorption is at
+    !! equilibrium (k_mt_soil = 0) the bed side's capacity includes the sorbed pool,
+    !! i.e. V_pw + Kd*M_s, so the exchange is not limited to the porewater alone.
+    !! Bed pools are per unit area [kg/m2]; dj_exchange is absolute [kg], PFAS_AQ
+    !! slot, positive from water to bed. The caller removes it from its water store.
+    subroutine update_pfas_bed(me, dt, m_water, volume_water, bedArea, dj_exchange)
+        class(AbstractBedSediment), intent(inout) :: me
+        real(dp), intent(in) :: dt
+        type(Contaminant), intent(in) :: m_water        !! Water store facing the bed; its PFAS_AQ slot is used [kg]
+        real(dp), intent(in) :: volume_water            !! Volume of that water [m3]
+        real(dp), intent(in) :: bedArea                 !! Bed area [m2]
+        type(Contaminant), intent(inout) :: dj_exchange !! Dissolved exchange, +ve water -> bed [kg]
+        type(Result) :: rr
+        real(dp) :: V_pw, M_s, dz, phi, k_ex, cap_w, cap_s, C_w, C_s, lambda, dm
+        integer :: l, i, f
+
+        rr = dj_exchange%create()
+        if (.not. allocated(me%m_contaminant)) return
+
+        ! (1) and (2), layer by layer (per unit area)
+        do l = 1, C%nSedimentLayers
+            V_pw = me%colBedSedimentLayers(l)%item%V_w_layer()
+            M_s = me%colBedSedimentLayers(l)%item%M_f_layer()
+            call me%m_contaminant(l+2)%partition_phases(dt, V_pw, PFAS_SOL, M_s, 0.0_dp)
+            rr = me%m_contaminant(l+2)%transformation(dt)
+        end do
+
+        ! (3) Sediment-water exchange with the top layer
+        if (bedArea <= C%epsilon .or. volume_water <= C%epsilon .or. .not. allocated(m_water%c)) return
+        V_pw = me%colBedSedimentLayers(1)%item%V_w_layer()
+        M_s = me%colBedSedimentLayers(1)%item%M_f_layer()
+        if (V_pw <= C%epsilon) return
+        dz = real(C%sedimentLayerDepth(1), dp)
+        phi = 1.0_dp
+        if (dz > C%epsilon) phi = max(1.0e-3_dp, min(1.0_dp, V_pw / dz))
+
+        associate (bed => me%m_contaminant(3))
+            do i = 1, min(size(bed%c, 1), size(m_water%c, 1))
+                if (DATASET%sedimentWaterExchangeVelocity >= 0.0_dp) then
+                    k_ex = DATASET%sedimentWaterExchangeVelocity
+                else if (allocated(DATASET%pfasDiffusivity) .and. dz > C%epsilon) then
+                    k_ex = 0.0_dp
+                    if (i <= size(DATASET%pfasDiffusivity)) &
+                        k_ex = phi * DATASET%pfasDiffusivity(i) / (1.0_dp - 2.0_dp * log(phi)) / (0.5_dp * dz)
+                else
+                    k_ex = 0.0_dp
+                end if
+                if (k_ex <= 0.0_dp) cycle
+                cap_w = volume_water
+                if (bed%k_mt_solid(i) > 0.0_dp) then
+                    cap_s = V_pw * bedArea
+                else
+                    cap_s = (V_pw + max(0.0_dp, bed%kd_solid(i)) * M_s) * bedArea
+                end if
+                lambda = k_ex * bedArea * (1.0_dp / cap_w + 1.0_dp / cap_s)
+                do f = 1, min(size(bed%c, 2), size(m_water%c, 2))
+                    C_w = max(0.0_dp, m_water%c(i,f,PFAS_AQ)) / cap_w
+                    if (bed%k_mt_solid(i) > 0.0_dp) then
+                        C_s = max(0.0_dp, bed%c(i,f,PFAS_AQ)) * bedArea / cap_s
+                    else
+                        C_s = (max(0.0_dp, bed%c(i,f,PFAS_AQ)) + max(0.0_dp, bed%c(i,f,PFAS_SOL))) &
+                              * bedArea / cap_s
+                    end if
+                    dm = (C_w - C_s) * (1.0_dp - exp(-lambda * dt)) / (1.0_dp / cap_w + 1.0_dp / cap_s)
+                    ! Bounded by the exact solution; guard FP noise against the available mass
+                    dm = min(dm, max(0.0_dp, m_water%c(i,f,PFAS_AQ)))
+                    dm = max(dm, -max(0.0_dp, bed%c(i,f,PFAS_AQ) + merge(0.0_dp, bed%c(i,f,PFAS_SOL), &
+                        bed%k_mt_solid(i) > 0.0_dp)) * bedArea)
+                    dj_exchange%c(i,f,PFAS_AQ) = dm
+                    bed%c(i,f,PFAS_AQ) = bed%c(i,f,PFAS_AQ) + dm / bedArea
+                end do
+            end do
+            ! A gain/loss of porewater re-equilibrates with the solids (dt = 0: an
+            ! equilibrium pool re-partitions instantly, a rate-limited one is left
+            ! to the next step)
+            call bed%partition_phases(0.0_dp, V_pw, PFAS_SOL, M_s, 0.0_dp)
+            call bed%clamp_negative()
+        end associate
+        dj_exchange%m_dissolved = sum(dj_exchange%c(:,:,PFAS_AQ))
+    end subroutine update_pfas_bed
 end module                     

@@ -48,10 +48,16 @@ OBJECTS_ = ErrorInstance.o \
 	mod_strptime.o \
 	VersionModule.o \
 	DefaultsModule.o \
+	PFASConstantsModule.o \
 	GlobalsModule.o \
+	PFASProcessModule.o \
+	PFASFoamModule.o \
+	PFASAtmosphereModule.o \
 	UtilModule.o \
 	LoggerModule.o \
+	ConstantsDefaultsModule.o \
 	DataInputModule.o \
+	PFASParameterisationModule.o \
 	ContaminantModule.o \
 	FlowModule.o \
 	AbstractBiotaModule.o \
@@ -75,6 +81,7 @@ OBJECTS_ = ErrorInstance.o \
 	ReachModule.o \
 	RiverReachModule.o \
 	EstuaryReachModule.o \
+	LakeSegmentModule.o \
 	AbstractGridCellModule.o \
 	GridCellModule.o \
 	AbstractEnvironmentModule.o \

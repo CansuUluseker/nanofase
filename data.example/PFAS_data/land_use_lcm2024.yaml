@@ -1,0 +1,66 @@
+# ==============================================================================
+# UKCEH LCM2024 25 m -> NanoFASE land-use crosswalk
+# ==============================================================================
+#
+# LCM2024 band-1 class IDs:
+#  1 Broadleaved woodland
+#  2 Coniferous woodland
+#  3 Arable
+#  4 Improved grassland
+#  5 Neutral grassland
+#  6 Calcareous grassland
+#  7 Acid grassland
+#  8 Fen, marsh and swamp
+#  9 Heather
+# 10 Heather grassland
+# 11 Bog
+# 12 Inland rock
+# 13 Saltwater
+# 14 Freshwater
+# 15 Supra-littoral rock
+# 16 Supra-littoral sediment
+# 17 Littoral rock
+# 18 Littoral sediment
+# 19 Saltmarsh
+# 20 Urban
+# 21 Suburban
+#
+# NanoFASE land-use classes:
+# urban_no_soil, urban_parks_leisure, urban_industrial_soil,
+# urban_green_residential, arable, grassland, deciduous, coniferous,
+# heathland, water, desert, other.
+#
+# ==============================================================================
+
+1: [ 'deciduous' ]                 # Broadleaved woodland
+2: [ 'coniferous' ]                # Coniferous woodland
+3: [ 'arable' ]                    # Arable
+
+4: [ 'grassland' ]                 # Improved grassland
+5: [ 'grassland' ]                 # Neutral grassland
+6: [ 'grassland' ]                 # Calcareous grassland
+7: [ 'grassland' ]                 # Acid grassland
+8: [ 'other' ]                     # Fen, marsh and swamp
+
+9: [ 'heathland' ]                 # Heather
+10: [ 'heathland' ]                # Heather grassland
+11: [ 'heathland' ]                # Bog
+
+12: [ 'other' ]                    # Inland rock
+
+13: [ 'water' ]                    # Saltwater
+14: [ 'water' ]                    # Freshwater
+
+15: [ 'other' ]                    # Supra-littoral rock
+16: [ 'desert' ]                   # Supra-littoral sediment
+17: [ 'other' ]                    # Littoral rock
+18: [ 'other' ]                    # Littoral sediment
+19: [ 'other' ]                    # Saltmarsh
+
+20:                                  # Urban
+    - [ 'urban_no_soil', 0.7 ]
+    - [ 'urban_green_residential', 0.3 ]
+
+21:                                  # Suburban
+    - [ 'urban_no_soil', 0.4 ]
+    - [ 'urban_green_residential', 0.6 ]

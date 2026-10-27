@@ -6,7 +6,7 @@ module AbstractSoilLayerModule
     use BiotaSoilModule
     use ContaminantModule
     use DataInputModule, only: DATASET
-    use PFASEConstantsModule, only: PFAS_AQ, PFAS_SOL, PFAS_AWI
+    use PFASConstantsModule, only: PFAS_AQ, PFAS_SOL, PFAS_AWI
     implicit none
 
     !> Abstract base class for \1 object. Defines properties and
@@ -35,6 +35,7 @@ module AbstractSoilLayerModule
         real(dp)                :: bulkDensity                          !! Bulk density [kg m-3]
         real(dp)                :: d_grain                              !! Average grain diameter [m]
         real(dp)                :: porosity                             !! Porosity [-]
+        real(dp)                :: awiSpecificArea = 0.0_dp             !! PFAS air-water interfacial area per bulk volume at zero saturation [m2 m-3]
         real(dp)                :: earthwormDensity                     !! Earthworm density [individuals/layer]
         real(dp)                :: alpha_att
         real(dp), allocatable   :: k_att(:)
@@ -51,7 +52,6 @@ module AbstractSoilLayerModule
         procedure(createAbstractSoilLayer), deferred :: create
         procedure(updateAbstractSoilLayer), deferred :: update
         procedure(addPooledWaterAbstractSoilLayer), deferred :: addPooledWater
-        procedure(updateContaminantStateAbstractSoilLayer), deferred :: update_contaminant_state
         procedure(erodeAbstractSoilLayer), deferred :: erode
         procedure(parseInputDataAbstractSoilLayer), deferred :: parseInputData
         procedure(calculateBioturbationRateAbstractSoilLayer), deferred :: calculateBioturbationRate
@@ -103,13 +103,6 @@ module AbstractSoilLayerModule
             type(Contaminant), intent(in) :: j_contaminant_in
             type(Result) :: r                               !! The `Result` object to return, with no data
         end function
-
-        subroutine updateContaminantStateAbstractSoilLayer(me, T_water_t)
-            use GlobalsModule, only: dp 
-            import AbstractSoilLayer
-            class(AbstractSoilLayer), intent(inout) :: me
-            real(dp), intent(in) :: T_water_t
-        end subroutine
 
         !> Add a volume \( V_{\text{pool}} \) of pooled water to the layer.
         !! No percolation occurs as pooled water never really leaves the AbstractSoilLayer.

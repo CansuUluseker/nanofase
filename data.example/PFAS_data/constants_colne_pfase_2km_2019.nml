@@ -1,0 +1,204 @@
+!! ============================================================================
+!! P-FASE CONSTANTS: COLNE 2 km, 2019
+!! ============================================================================
+
+
+&allocatable_array_sizes
+    n_contaminant_size_classes = 1
+    n_default_contaminant_size_distribution = 1
+    n_default_contaminant_form_distribution = 2
+
+    n_default_matrixembedded_distribution_to_spm = 5
+    n_default_spm_size_distribution = 5
+    n_spm_density_by_size_class = 5
+
+    n_estuary_mouth_coords = 2
+    n_fractional_composition_distribution = 2
+    n_initial_mass = 5
+    n_porosity = 4
+    n_vertical_distribution = 3
+/
+
+&contaminant
+    !! Compatibility values only; PFAS is not represented as a physical particle.
+    contaminant_density = 1000.0
+    contaminant_size_classes = 1.0e-9
+    default_contaminant_size_distribution = 100
+
+    !! One active PFAS form plus retained legacy dissolved slot.
+    default_contaminant_form_distribution = 100.0, 0.0
+
+    !! Disable legacy nanoparticle kinetics.
+    k_diss_pristine = 0.0
+    k_diss_transformed = 0.0
+    k_transform_pristine = 0.0
+/
+
+&soil
+    darcy_velocity = 9.0e-6
+    default_porosity = 0.456
+    hamaker_constant = 6.9e-21
+    particle_density = 2500.0
+
+    !! Do not use nanoparticle attachment as PFAS sorption.
+    soil_constant_attachment_efficiency = 0.0
+
+    erosivity_a1 = 6.608
+    erosivity_a2 = 0.5
+    erosivity_a3 = 2.7
+    erosivity_b = 1.204
+
+    !! Safe first-run sediment-transport fallbacks.
+    sediment_transport_a = 2.0e-9
+    sediment_transport_b = 0.0
+    sediment_transport_c = 0.2
+/
+
+&water
+    river_attachment_efficiency = 0.0
+    estuary_attachment_efficiency = 0.0
+
+    resuspension_alpha = 0.003
+    resuspension_beta = 0.007
+    resuspension_alpha_estuary = 0.003
+    resuspension_beta_estuary = 0.007
+
+    deposition_alpha = 38.1
+    deposition_beta = 0.93
+
+    bank_erosion_alpha = 1.0e-9
+    bank_erosion_beta = 1.0
+
+    min_water_temperature = 4.0
+    max_water_temperature = 21.0
+    min_water_temperature_day_of_year = 32
+    shear_rate = 10.0
+
+    river_meandering_factor = 0.0
+    estuary_meandering_factor = 0.0
+
+    !! Estuary disabled in runtime config; placeholders only.
+    estuary_tidal_m2 = 0.0
+    estuary_tidal_s2 = 0.0
+    estuary_mouth_coords = 0.0, 0.0
+    estuary_mean_depth_expa = 1.0
+    estuary_mean_depth_expb = 0.0
+    estuary_width_expa = 1.0
+    estuary_width_expb = 0.0
+/
+
+&sediment
+    porosity = 0.8, 0.6, 0.4, 0.2
+
+    !! Current DataInputModule namelist variable name:
+    sedimentInitialMass = 0.02, 0.02, 0.32, 0.32, 0.32
+
+    fractional_composition_distribution = 0.5, 0.5
+    default_spm_size_distribution = 50, 30, 10, 7, 3
+    default_matrixembedded_distribution_to_spm = 20, 20, 20, 20, 20
+
+    !! 2600 is used for the second mineral class; the 260 in an older sample
+    !! appears physically implausible and is treated here as a likely typo.
+    spm_density_by_size_class = 1700, 2600, 2600, 1700, 1300
+/
+
+&earthworm_densities
+    arable = 30
+    coniferous = 150
+    deciduous = 400
+    grassland = 250
+    heathland = 20
+    urban_capped = 0
+    urban_gardens = 150
+    urban_parks = 250
+    vertical_distribution = 50, 35, 15
+/
+
+&pfas
+    !! PFAS species properties and partitioning. Optional group; every value below is
+    !! the inert default (no sorption, no AWI adsorption, no transformation), so fill
+    !! in species values (one entry per n_pfas_species, same order) to activate them.
+    !!
+    !! Kd is resolved PER GRID CELL, separately for soil (and bed) solids and for SPM:
+    !!   1. NetCDF map 'pfas_kd_soil' / 'pfas_kd_spm' (x,y,species) [L/kg], where given;
+    !!   2. else Kd = koc * foc * 10**(kd_ph_slope*(pH - kd_ph_reference)) when koc > 0,
+    !!      with foc/pH from the NetCDF maps 'soil_organic_carbon'/'soil_ph' (soil) or
+    !!      'spm_organic_carbon'/'water_ph' (SPM), else the constants below;
+    !!   3. else the constant kd_soil / kd_spm.
+    species_names = 'PFAS_1'
+    kd_soil = 0.0                   !! Constant soil/bed Kd [L/kg]
+    kd_spm = 0.0                    !! Constant SPM Kd [L/kg]
+    koc = 0.0                       !! Koc [L/kg OC]; > 0 switches on Kd = Koc*foc (ITRC Table 4-1)
+    kd_ph_slope = 0.0               !! d(log10 Kd)/d(pH) [-]; negative = less sorption at higher pH
+    kd_ph_reference = 7.0           !! pH at which koc applies unmodified [-]
+    soil_organic_carbon = -1.0      !! foc fallback where 'soil_organic_carbon' map absent [kg OC/kg]; -1 = none
+    soil_ph = -1.0                  !! pH fallback where 'soil_ph' map absent; -1 = no pH correction
+    spm_organic_carbon = -1.0       !! foc of SPM fallback [kg OC/kg]; -1 = none
+    water_ph = -1.0                 !! Surface water pH fallback; -1 = no pH correction
+
+    !! Bed sediment Kd per cell: map 'pfas_kd_sediment' (x,y,species) [L/kg], else
+    !! koc * foc with foc from the 'sediment_organic_carbon' map or the constant below
+    !! (and the water pH), else the constant kd_sediment, else the cell's SPM Kd.
+    kd_sediment = -1.0              !! [L/kg]; -1 = not given
+    sediment_organic_carbon = -1.0  !! [kg OC/kg]; -1 = not given
+
+    !! Air-water interface (AWI) adsorption, Gamma = kia * C_w. In soil the interfacial
+    !! area is a_aw * (1 - S_w) * layer volume, updated every step from the soil water
+    !! saturation S_w. a_aw [m2/m3] comes from the NetCDF map 'soil_awi_specific_area',
+    !! else is computed as awi_geometric_factor * 6(1-porosity)/d_grain from the soil
+    !! texture, else (awi_geometric_factor <= 0) the constant soil_awi_specific_area.
+    !! In rivers, lakes and estuaries the area is the water surface area.
+    kia = 0.0                       !! AWI adsorption coefficient [m] (1 cm = 0.01 m)
+    awi_geometric_factor = 1.0      !! Roughness multiplier on the smooth-sphere area [-]
+    soil_awi_specific_area = 0.0    !! [m2/m3], used only when awi_geometric_factor <= 0
+
+    !! Dissolved exchange between the water column and the top bed layer's porewater,
+    !! k*(C_w - C_porewater). k = sediment_water_exchange_velocity if >= 0, else computed
+    !! from the diffusivity and the top layer's porosity and depth (Boudreau tortuosity).
+    diffusivity = 0.0               !! Free-water molecular diffusivity [m2/s], ~5e-10 for PFAAs
+    sediment_water_exchange_velocity = -1.0  !! [m/s]; -1 = compute from diffusivity
+
+    !! Salinity (estuaries): Kd and Kia increase with salinity ("salting out"), as
+    !! 10**(coefficient * salinity). Salinity from the NetCDF map 'water_salinity' [psu],
+    !! else estuary_salinity in estuary cells, else 0. Static in time.
+    kd_salinity_coefficient = 0.0   !! d(log10 Kd)/d(salinity) [1/psu]
+    kia_salinity_coefficient = 0.0  !! d(log10 Kia)/d(salinity) [1/psu]
+    estuary_salinity = 0.0          !! [psu]
+
+    !! Dissolved PFAS from the land to rivers.
+    !! Overland runoff ('quickflow', see &hydrology) mixes with the porewater of the top
+    !! runoff_mixing_depth of soil and leaves with its concentration; <= 0 switches it off.
+    runoff_mixing_depth = 0.01      !! [m]
+    !! Leachate from the bottom soil layer recharges a linear groundwater reservoir that
+    !! discharges to the cell's reaches as baseflow, residence time from the NetCDF map
+    !! 'groundwater_residence_time' [days] or this constant; <= 0 = no reservoir (leachate
+    !! leaves the model, as before).
+    groundwater_residence_time = -1.0   !! [days]
+
+    !! Rate-limited sorption: first-order relaxation towards equilibrium [1/s]; 0 = equilibrium
+    k_mt_soil = 0.0
+    k_mt_spm = 0.0
+    k_mt_awi = 0.0
+
+    !! Precursor -> product transformation, reaction_rate(i,j) from species i to j [1/s]
+    !! and molar-equivalent yield, e.g. reaction_rate(1,2) = 1.0e-7, reaction_yield(1,2) = 1.0
+    reaction_rate = 0.0
+    reaction_yield = 0.0
+    !! Bed sediment (anoxic) rates; if no element is given the bed uses reaction_rate
+    !! reaction_rate_sediment(1,2) = 0.0
+
+    !! Volatilisation acts on the neutral (acid) form only, f_n = 1/(1 + 10**(pH - pKa)),
+    !! when pka and a water pH ('water_ph' map or water_ph above) are given
+    !! pka = ...
+
+    !! Precursor metabolism inside organisms (biota burdens), species i -> j [1/day],
+    !! products formed with reaction_yield(i,j), e.g. biota_transformation_rate(1,2) = 0.05
+    !! Food web: in &biota, prey(k) = index of the biota organism k eats (same compartment,
+    !! 0 = none) and k_diet(k) = feeding rate x assimilation efficiency [1/day]; k_death(k)
+    !! = loss/death dilution [1/day]. All optional.
+
+    !! Surface water exchange rates [1/s] (scalars, all species)
+    foam_coefficient = 0.0
+    volatilisation_rate = 0.0
+    sea_spray_aerosol_rate = 0.0
+/

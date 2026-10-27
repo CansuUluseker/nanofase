@@ -10,7 +10,8 @@ module SoilProfileModule
     use SoilLayerModule
     use DataInputModule, only: DATASET
     use ContaminantModule
-    use PFASEConstantsModule, only: PFAS_AQ, PFAS_SOL
+    use PFASConstantsModule, only: PFAS_AQ, PFAS_SOL
+    use PFASParameterisationModule, only: pfas_groundwater_residence_time
     implicit none
 
     !> A SoilProfile class acts as a container for a collection of SoilLayer objects,
@@ -29,6 +30,8 @@ module SoilProfileModule
         procedure :: parseNewBatchData => parseNewBatchDataSoilProfile
         ! Getters
         procedure :: get_m_contaminant => get_m_contaminant_SoilProfile
+        procedure :: surfaceRunoffContaminant => surfaceRunoffContaminantSoilProfile
+        procedure :: groundwaterContaminant => groundwaterContaminantSoilProfile
         procedure :: get_C_contaminant => get_C_contaminant_SoilProfile
     end type
 
@@ -98,6 +101,23 @@ contains
             call ERROR_HANDLER%trigger(errors=.errors.r)
             return
         end if
+        r = me%m_contaminant_surfaceRunoff%create()
+        if (r%hasCriticalError()) then
+            call ERROR_HANDLER%trigger(errors=.errors.r)
+            return
+        end if
+        r = me%m_contaminant_baseflow%create()
+        if (r%hasCriticalError()) then
+            call ERROR_HANDLER%trigger(errors=.errors.r)
+            return
+        end if
+        ! The groundwater store carries the soil transformation rates
+        r = me%m_contaminant_groundwater%create_from_data('soil', x=x, y=y)
+        if (r%hasCriticalError()) then
+            call ERROR_HANDLER%trigger(errors=.errors.r)
+            return
+        end if
+        me%gwResidenceTime = pfas_groundwater_residence_time(x, y)
 
         ! Parse and store input data in this object's properties
         call r%addErrors(.errors. me%parseInputData())
@@ -133,10 +153,6 @@ contains
         integer, intent(in) :: t
         type(Contaminant), intent(in) :: j_contaminant_diffuseSource
         type(Result) :: r
-        integer :: l
-        type(datetime) :: currentDate
-        real(dp) :: T_water_t
-
         ! Reset for this timestep
         me%V_pool = 0.0_dp
 
@@ -144,23 +160,22 @@ contains
         call me%m_contaminant_in%empty()
         call me%m_contaminant_eroded%empty()
         call me%m_contaminant_buried%empty()
+        call me%m_contaminant_surfaceRunoff%empty()
+        call me%m_contaminant_baseflow%empty()
 
         if (.not. me%isUrban) then
             me%q_precip = me%q_precip_timeSeries(t)
             me%q_evap   = me%q_evap_timeSeries(t)
             me%q_in     = max(real(me%q_precip - me%q_evap, dp), 0.0_dp)
 
-            currentDate = C%startDate + timedelta(t-1)
-            T_water_t = DATASET%waterTemperature(currentDate%yearday())
-
-            ! Apply PFAS phase equilibration/transformation before erosion.
-            do l = 1, C%nSoilLayers
-                call me%colSoilLayers(l)%item%update_contaminant_state(T_water_t)
-            end do
-
+            ! PFAS partitioning and transformation run once per step, inside
+            ! SoilLayer%update (called by percolate); erosion takes the sorbed
+            ! state left by the previous step.
             call r%addErrors(.errors. me%erode(t))
             call r%addErrors(.errors. me%percolate(t, j_contaminant_diffuseSource))
             call r%addErrors(.errors. me%bioturbation())
+            call me%surfaceRunoffContaminant(t)
+            call me%groundwaterContaminant()
 
             me%m_contaminant = me%get_m_contaminant()
         else
@@ -170,6 +185,59 @@ contains
 
         call r%addToTrace("Updating " // trim(me%ref) // " on timestep #" // trim(str(t)))
     end function updateSoilProfile
+
+    !> Dissolved PFAS carried off with surface runoff. The runoff is taken
+    !! to mix completely with the porewater of a thin surface mixing zone (depth
+    !! &pfas runoff_mixing_depth) of the top soil layer and leave with that zone's
+    !! porewater concentration, so the fraction of the zone's dissolved mass exported
+    !! is q_s / (V_mix + q_s), with q_s the surface runoff [m3/m2] (quickflow) and 
+    !! V_mix the porewater in the zone [m3/m2]. Sorbed and interface
+    !! PFAS leave only with eroded soil.
+    subroutine surfaceRunoffContaminantSoilProfile(me, t)
+        class(SoilProfile), intent(inout) :: me
+        integer, intent(in) :: t
+        real(dp) :: q_s, f_mix, V_mix, frac
+        q_s = 0.0_dp
+        if (allocated(DATASET%quickflow)) then
+            if (me%x <= size(DATASET%quickflow, 1) .and. me%y <= size(DATASET%quickflow, 2) &
+                .and. t <= size(DATASET%quickflow, 3)) q_s = max(0.0_dp, real(DATASET%quickflow(me%x, me%y, t), dp))
+        end if
+        if (q_s <= 0.0_dp .or. DATASET%runoffMixingDepth <= 0.0_dp) return
+        associate (top => me%colSoilLayers(1)%item)
+            if (top%depth <= C%epsilon .or. .not. allocated(top%m_contaminant%c)) return
+            f_mix = min(1.0_dp, DATASET%runoffMixingDepth / top%depth)
+            V_mix = max(0.0_dp, top%V_w) * f_mix
+            frac = f_mix * q_s / (V_mix + q_s)
+            me%m_contaminant_surfaceRunoff%c(:,:,PFAS_AQ) = max(0.0_dp, top%m_contaminant%c(:,:,PFAS_AQ)) * frac
+            top%m_contaminant%c(:,:,PFAS_AQ) = top%m_contaminant%c(:,:,PFAS_AQ) &
+                - me%m_contaminant_surfaceRunoff%c(:,:,PFAS_AQ)
+            call top%m_contaminant%clamp_negative()
+        end associate
+        me%m_contaminant_surfaceRunoff%m_dissolved = sum(me%m_contaminant_surfaceRunoff%c(:,:,PFAS_AQ))
+    end subroutine
+
+    !> Groundwater pathway: PFAS leached from the bottom soil layer recharges a linear
+    !! groundwater reservoir that discharges to surface water as baseflow with
+    !! residence time tau, i.e. a fraction 1 - exp(-dt/tau) per time step (tau lumps
+    !! the unsaturated-zone and aquifer travel time, including sorptive retardation).
+    !! Precursors in the reservoir transform with the soil rates. With no residence
+    !! time the leachate leaves the model through the bottom boundary.
+    subroutine groundwaterContaminantSoilProfile(me)
+        class(SoilProfile), intent(inout) :: me
+        type(Result) :: r
+        real(dp) :: dt
+        if (me%gwResidenceTime <= 0.0_dp .or. .not. allocated(me%m_contaminant_groundwater%c)) return
+        dt = real(C%timeStep, dp)
+        call me%m_contaminant_groundwater%add(me%m_contaminant_buried)
+        r = me%m_contaminant_groundwater%transformation(dt)
+        me%m_contaminant_baseflow%c = max(0.0_dp, me%m_contaminant_groundwater%c) &
+                                      * (1.0_dp - exp(-dt / me%gwResidenceTime))
+        call me%m_contaminant_groundwater%add_scaled(me%m_contaminant_baseflow, -1.0_dp)
+        call me%m_contaminant_groundwater%clamp_negative()
+        ! Discharge to surface water is dissolved
+        call me%m_contaminant_baseflow%move_phase(PFAS_SOL, PFAS_AQ)
+        me%m_contaminant_baseflow%m_dissolved = sum(me%m_contaminant_baseflow%c(:,:,PFAS_AQ))
+    end subroutine
 
     !> Percolate water through the `SoilProfile`, by looping through `SoilLayer`s
     !! and running their individual percolation procedures, and then passing

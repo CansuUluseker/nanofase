@@ -7,7 +7,7 @@ module DataInputModule
     use DefaultsModule
     use ConstantsDefaultsModule
     use GlobalsModule, only: dp, C
-    use PFASEConstantsModule, only: PFAS_AQ, PFAS_SOL, PFAS_SPM, PFAS_AWI, PFAS_FOAM, PFAS_AIR, PFAS_NPHASES
+    use PFASConstantsModule, only: PFAS_AQ, PFAS_SOL, PFAS_SPM, PFAS_AWI, PFAS_FOAM, PFAS_AIR, PFAS_NPHASES
     use ResultModule, only: Result
     use ErrorInstanceModule, only: ErrorInstance
     use LoggerModule, only: LOGR
@@ -67,7 +67,10 @@ module DataInputModule
         character(len=100), allocatable :: biotaCompartment(:)
         real(dp), allocatable :: biotaInitial_C_org(:)
         real(dp), allocatable :: biota_k_growth(:)
-        real(dp), allocatable :: biota_k_death(:)
+        real(dp), allocatable :: biota_k_death(:)                ! Loss/death dilution [/day]; optional k_death in &biota
+        integer, allocatable :: biotaPrey(:)                     ! Index of the biota this one eats (same compartment), 0 = none
+        real(dp), allocatable :: biota_k_diet(:)                 ! Dietary uptake = feeding rate x assimilation efficiency [/day]
+        real(dp), allocatable :: pfasBiotaTransformationRate(:,:)  ! In-organism precursor transformation, species i -> j [/day]
         real(dp), allocatable :: biota_k_uptake_contaminant(:,:) ! Uptake rates for contaminant forms [nBiota, nContaminantForms]
         real(dp), allocatable :: biota_k_elim_contaminant(:,:)   ! Elimination rates for contaminant forms [nBiota, nContaminantForms]
         real(dp), allocatable :: biota_k_uptake_dissolved(:)     ! Uptake rate for dissolved contaminant
@@ -134,11 +137,23 @@ module DataInputModule
         integer, allocatable :: nWaterbodies(:,:)
         logical, allocatable :: isEstuary(:,:)
         integer :: maxNWaterbodies                  ! Maximum number of waterbodies per cell in the model domain
+        ! Lakes and reservoirs. Lake segments are contained within grid cells (max size = cell
+        ! area); waterbodies spanning multiple cells are split into one segment per cell.
+        logical, allocatable :: isLake(:,:)                 ! Does this cell contain a lake segment?
+        logical, allocatable :: isReservoir(:,:)            ! Does this cell contain a reservoir segment?
+        real, allocatable :: lakeDepth(:,:)                 ! Lake segment depth at outlet/spillway level [m]
+        real, allocatable :: lakeAreaFraction(:,:)          ! Fraction of cell area covered by the lake segment [-]
+        real, allocatable :: reservoirReleaseRate(:,:)      ! Controlled spillway release rate [m3/s]
+        integer, allocatable :: reservoirSpillwayType(:,:)  ! 0 = uncontrolled, 1 = controlled, 2 = combination
+        integer, allocatable :: lakeId(:,:)                 ! Lake identifier; segments of the same (multi-cell) lake share an id, 0 = no lake
+        logical :: hasLakeRouting = .false.                 ! Was a 'lake_outflow' routing network provided and merged in?
         ! Spatiotemporal variables
         real, allocatable :: runoff(:,:,:)
         real, allocatable :: quickflow(:,:,:)
         real, allocatable :: precip(:,:,:)
         real, allocatable :: evap(:,:,:)
+        real, allocatable :: windSpeedTimeSeries(:,:,:)     ! Wind speed at 10 m [m/s], used for lake stratification/resuspension
+        real, allocatable :: solarRadiation(:,:,:)          ! Downward solar radiation [W/m2], used for lake stratification
         ! Spatial variables
         real, allocatable :: soilBulkDensity(:,:)
         real, allocatable :: soilWaterContentFieldCapacity(:,:)
@@ -188,28 +203,78 @@ module DataInputModule
         ! Spatial 1D variables
         real, allocatable :: landUse(:,:,:)
 
-        ! P-FASE PFAS property arrays (species-resolved). These are optional until
-        ! the NetCDF/constants schema is populated; ContaminantModule uses safe defaults.
+        ! P-FASE PFAS species properties, read from the optional &pfas group of the
+        ! constants file (all species-resolved, sized C%contaminantDim(1)). Partition
+        ! coefficients are stored in SI [m3 kg-1]; the namelist takes L kg-1.
         character(len=64), allocatable :: pfasSpeciesNames(:)
         real(dp), allocatable :: pfasMolecularWeight(:), pfasCharge(:), pfasPka(:)
-        real(dp), allocatable :: pfasKdSolid(:), pfasKdSpm(:), pfasKawAwi(:)
-        real(dp), allocatable :: pfasKAdsSolid(:), pfasKDesSolid(:)
-        real(dp), allocatable :: pfasKAdsSpm(:), pfasKDesSpm(:)
-        real(dp), allocatable :: pfasKAdsAwi(:), pfasKDesAwi(:)
+        real(dp) :: pfasPkaUnset = -900.0_dp            ! pKa at or below this = not given (PFSA pKa can be < 0)
+        real(dp), allocatable :: pfasKdSoil(:)          ! Constant soil/bed Kd, fallback when no map and no Koc [m3 kg-1]
+        real(dp), allocatable :: pfasKdSpm(:)           ! Constant SPM Kd, fallback when no map and no Koc [m3 kg-1]
+        real(dp), allocatable :: pfasKoc(:)             ! Organic-carbon normalised Kd; > 0 enables Kd = Koc*foc [m3 kg-1 OC]
+        real(dp), allocatable :: pfasKdPhSlope(:)       ! d(log10 Kd)/d(pH) for the Koc*foc route [-]
+        real(dp) :: pfasKdPhReference = 7.0_dp          ! pH at which Koc applies unmodified [-]
+        real(dp), allocatable :: pfasKia(:)             ! Air-water interfacial adsorption coefficient [m]
+        real(dp), allocatable :: pfasKMtSoil(:)         ! Soil/bed sorption mass-transfer rate, 0 = equilibrium [s-1]
+        real(dp), allocatable :: pfasKMtSpm(:)          ! SPM sorption mass-transfer rate, 0 = equilibrium [s-1]
+        real(dp), allocatable :: pfasKMtAwi(:)          ! AWI adsorption mass-transfer rate, 0 = equilibrium [s-1]
         real(dp), allocatable :: pfasReactionRate(:,:), pfasReactionYield(:,:)
-        real(dp), allocatable :: pfasFoamCoeff(:), pfasVolatilisationRate(:), pfasSeasprayRate(:)
-        real(dp), allocatable :: pfasBioUptakeRate(:), pfasPlantUptakeRate(:)
+        real(dp), allocatable :: pfasKdSediment(:)      ! Constant bed-sediment Kd; negative = use the SPM Kd [m3 kg-1]
+        real(dp), allocatable :: pfasReactionRateSediment(:,:)  ! Bed (anoxic) transformation rates; unset = pfasReactionRate [s-1]
+        real(dp), allocatable :: pfasDiffusivity(:)     ! Free-water molecular diffusivity [m2 s-1]
+        real(dp) :: sedimentWaterExchangeVelocity = -1.0_dp  ! Sediment-water mass-transfer velocity; negative = from diffusivity [m s-1]
+        real(dp), allocatable :: pfasKdSalinityCoefficient(:)   ! d(log10 Kd)/d(salinity), salting-out [psu-1]
+        real(dp), allocatable :: pfasKiaSalinityCoefficient(:)  ! d(log10 Kia)/d(salinity) [psu-1]
+        real(dp) :: estuarySalinityConstant = 0.0_dp        ! Salinity of estuary cells where 'water_salinity' has no value [psu]
+        real(dp) :: runoffMixingDepth = 0.01_dp             ! Soil depth that exchanges with overland flow; <= 0 = no dissolved runoff [m]
+        real(dp) :: groundwaterResidenceTimeConstant = -1.0_dp  ! Groundwater reservoir residence time; <= 0 = no reservoir [days]
+        ! Soil and surface water properties driving the PFAS partitioning. The maps are
+        ! (x,y) [or (x,y,species)] and optional; cells with no map value (missing, fill
+        ! or negative) fall back to the model-computed value, then to the constants.
+        real(dp), allocatable :: pfasKdSoilMap(:,:,:)       ! 'pfas_kd_soil' (x,y,species) [m3 kg-1]
+        real(dp), allocatable :: pfasKdSpmMap(:,:,:)        ! 'pfas_kd_spm' (x,y,species) [m3 kg-1]
+        real(dp), allocatable :: pfasKdSedimentMap(:,:,:)   ! 'pfas_kd_sediment' (x,y,species) [m3 kg-1]
+        real(dp), allocatable :: sedimentOrganicCarbon(:,:) ! 'sediment_organic_carbon' (x,y) [kg OC kg-1]
+        real(dp), allocatable :: waterSalinity(:,:)         ! 'water_salinity' (x,y) [psu]
+        real(dp), allocatable :: groundwaterResidenceTime(:,:)  ! 'groundwater_residence_time' (x,y) [days]
+        real(dp), allocatable :: soilOrganicCarbon(:,:)     ! 'soil_organic_carbon' (x,y) [kg OC kg-1]
+        real(dp), allocatable :: soilPh(:,:)                ! 'soil_ph' (x,y) [-]
+        real(dp), allocatable :: spmOrganicCarbon(:,:)      ! 'spm_organic_carbon' (x,y) [kg OC kg-1]
+        real(dp), allocatable :: waterPh(:,:)               ! 'water_ph' (x,y) [-]
+        real(dp), allocatable :: soilAwiSpecificArea(:,:)   ! 'soil_awi_specific_area' (x,y), at zero saturation [m2 m-3]
+        real(dp) :: soilOrganicCarbonConstant = -1.0_dp     ! Negative = not supplied
+        real(dp) :: soilPhConstant = -1.0_dp
+        real(dp) :: spmOrganicCarbonConstant = -1.0_dp
+        real(dp) :: waterPhConstant = -1.0_dp
+        real(dp) :: sedimentOrganicCarbonConstant = -1.0_dp
+        real(dp) :: soilAwiSpecificAreaConstant = 0.0_dp    ! Used only when soilAwiGeometricFactor <= 0 [m2 m-3]
+        real(dp) :: soilAwiGeometricFactor = 1.0_dp         ! Multiplier on the smooth-sphere solid area 6(1-n)/d [-]
         ! Scalar forcing defaults used by water/estuary/biota modules when species-resolved
         ! arrays are absent or when a compact parameterisation is preferred.
         real(dp) :: pfasFoamCoefficient = 0.0_dp
         real(dp) :: pfasVolatilisationRateScalar = 0.0_dp
         real(dp) :: pfasSeaSprayAerosolRate = 0.0_dp
-        real(dp) :: pfasBioUptakeRateScalar = 0.0_dp
         real(dp) :: windSpeed = 0.0_dp
+
+        ! Lake/reservoir process constants. Defaults here; can be overridden via the
+        ! optional &lake namelist group in the constants file.
+        real(dp) :: lakeDefaultDepth = 5.0_dp                       ! Lake segment depth when 'lake_depth' isn't in the input data [m]
+        real(dp) :: lakeDefaultAreaFraction = 1.0_dp                ! Fraction of cell covered when 'lake_area_fraction' isn't in the input data [-]
+        real(dp) :: lakeStratificationRadiationThreshold = 120.0_dp ! Solar radiation above which stratification can form [W/m2]
+        real(dp) :: lakeStratificationWindThreshold = 8.0_dp        ! Wind speed above which stratification breaks down [m/s]
+        real(dp) :: lakeStratificationTemperatureThreshold = 12.0_dp ! Water temperature proxy threshold when no solar radiation data [deg C]
+        real(dp) :: lakeEpilimnionBaseDepth = 2.0_dp                ! Epilimnion depth at zero wind [m]
+        real(dp) :: lakeEpilimnionWindCoefficient = 0.5_dp          ! Epilimnion deepening per unit wind speed [m/(m/s)]
+        real(dp) :: lakeEpilimnionMinDepth = 1.0_dp                 ! Minimum epilimnion depth [m]
+        real(dp) :: lakeInterlayerMixingVelocity = 0.05_dp          ! Diffusive exchange velocity across the thermocline [m/day]
+        real(dp) :: lakeWindResuspensionAttenuationDepth = 3.0_dp   ! e-folding depth for wind energy reaching the lake bed [m]
+        real(dp) :: reservoirDefaultReleaseRate = 0.0_dp            ! Controlled spillway release when 'reservoir_release_rate' isn't in the input data [m3/s]
 contains
         procedure, public   :: init => initDatabase
         procedure, public   :: update => updateDatabase
         procedure, public   :: readBatchVariables => readBatchVariablesDatabase
+        procedure, private  :: parseHydrology => parseHydrologyDatabase
+        procedure, private  :: mergeLakeRouting => mergeLakeRoutingDatabase
         procedure, private  :: parseConstants => parseConstantsDatabase
         procedure, private  :: mask => maskDatabase
         procedure, public   :: inModelDomain => inModelDomainDatabase
@@ -238,6 +303,8 @@ contains
         integer, allocatable :: outflow_dxy(:,:,:)
         integer, allocatable :: inflows_dwxy(:,:,:,:)
         integer, allocatable :: isHeadwaterInt_xy(:,:), isEstuaryInt_xy(:,:)
+        integer, allocatable :: lakeInt_xy(:,:), lakeOutflow_dxy(:,:,:)
+        logical :: hadIsLakeVar
         integer, allocatable :: nWaterbodies_xy(:,:)
         integer, allocatable :: simulationMask(:,:)
         integer :: nx, ny
@@ -293,10 +360,85 @@ contains
             allocate(me%isEstuary(nx, ny)); me%isEstuary = .false.
         end if
 
+        ! Lake and reservoir segment masks. Both are optional; cells not flagged
+        ! (or with the masks absent, or include_lakes = .false.) are simulated as rivers.
+        if (allocated(me%isLake)) deallocate(me%isLake)
+        allocate(me%isLake(nx, ny)); me%isLake = .false.
+        if (allocated(me%isReservoir)) deallocate(me%isReservoir)
+        allocate(me%isReservoir(nx, ny)); me%isReservoir = .false.
+        if (allocated(me%lakeId)) deallocate(me%lakeId)
+        allocate(me%lakeId(nx, ny)); me%lakeId = 0
+        me%hasLakeRouting = .false.
+        if (C%includeLakes) then
+            hadIsLakeVar = me%nc%hasVariable('is_lake')
+            if (hadIsLakeVar) then
+                var = me%nc%getVariable('is_lake'); call var%getData(lakeInt_xy)
+                me%isLake = ulgcl(lakeInt_xy)
+                deallocate(lakeInt_xy)
+                call LOGR%add("DataInput: Read 'is_lake' mask (" // trim(str(count(me%isLake))) // " lake cells)")
+            end if
+            if (me%nc%hasVariable('is_reservoir')) then
+                var = me%nc%getVariable('is_reservoir'); call var%getData(lakeInt_xy)
+                me%isReservoir = ulgcl(lakeInt_xy)
+                deallocate(lakeInt_xy)
+                call LOGR%add("DataInput: Read 'is_reservoir' mask (" &
+                    // trim(str(count(me%isReservoir))) // " reservoir cells)")
+            end if
+
+            ! Lake identifiers: segments of the same (multi-cell) lake or reservoir
+            ! share an id. If no 'is_lake' mask was given, lake cells are derived
+            ! from the ids instead, so 'lake_id' alone is a sufficient mask.
+            if (me%nc%hasVariable('lake_id')) then
+                var = me%nc%getVariable('lake_id'); call var%getData(lakeInt_xy)
+                where (lakeInt_xy > 0) me%lakeId = lakeInt_xy
+                deallocate(lakeInt_xy)
+                if (.not. hadIsLakeVar) then
+                    me%isLake = me%lakeId > 0
+                    call LOGR%add("DataInput: Derived lake cells from 'lake_id' (" &
+                        // trim(str(count(me%isLake))) // " cells)")
+                end if
+            end if
+            ! A reservoir is a lake segment with a dam; don't double count
+            where (me%isReservoir) me%isLake = .false.
+
+            ! Lake routing network: an optional per-cell outflow override for lake and
+            ! reservoir segments, connecting the segments of a multi-cell lake to each
+            ! other and to the river network at the lake outlet. 
+            if (me%nc%hasVariable('lake_outflow')) then
+                ! Same layout as 'outflow': file (y,x,d) -> returned (d,x,y)
+                var = me%nc%getVariable('lake_outflow'); call var%getData(lakeOutflow_dxy)
+                call me%mergeLakeRouting(lakeOutflow_dxy)
+                deallocate(lakeOutflow_dxy)
+            end if
+        end if
+
+        ! Optional lake/reservoir spatial parameters, (x,y) indexed like the
+        ! resuspension/sediment transport parameters (no transpose)
+        if (me%nc%hasVariable('lake_depth')) then
+            var = me%nc%getVariable('lake_depth')
+            if (allocated(me%lakeDepth)) deallocate(me%lakeDepth)
+            call var%getData(me%lakeDepth)
+        end if
+        if (me%nc%hasVariable('lake_area_fraction')) then
+            var = me%nc%getVariable('lake_area_fraction')
+            if (allocated(me%lakeAreaFraction)) deallocate(me%lakeAreaFraction)
+            call var%getData(me%lakeAreaFraction)
+        end if
+        if (me%nc%hasVariable('reservoir_release_rate')) then
+            var = me%nc%getVariable('reservoir_release_rate')
+            if (allocated(me%reservoirReleaseRate)) deallocate(me%reservoirReleaseRate)
+            call var%getData(me%reservoirReleaseRate)
+        end if
+        if (me%nc%hasVariable('reservoir_spillway_type')) then
+            var = me%nc%getVariable('reservoir_spillway_type')
+            if (allocated(me%reservoirSpillwayType)) deallocate(me%reservoirSpillwayType)
+            call var%getData(me%reservoirSpillwayType)
+        end if
+
         ! Digital elevation model [dm asl]
         ! Reach%parseInputData uses this to derive the stream slope from the elevation drop
         ! along the reach; if it isn't allocated, every reach silently falls back to
-        ! defaultSlope, which changes depth throughout the scenario
+        ! defaultSlope
         if (me%nc%hasVariable('dem')) then
             var = me%nc%getVariable('dem'); call var%getData(me%dem)
         else
@@ -617,9 +759,6 @@ contains
         ! ----------------------
         ! SEDIMENT TRANSPORT
         ! ----------------------
-        ! Note that these variables use (x,y) indexing (i.e. they aren't transposed
-        ! when they are retrieved from the NetCDF file). This is in constrast to the
-        ! soil spatial variables above, which are transposed to (y,x)
         !
         ! If a spatial var is available in the NetCDF file, this is used. If not,
         ! the constant value is used for the whole grid. If a constant isn't available
@@ -722,27 +861,9 @@ contains
         !----------------------
         ! BASIC TIME SERIES
         !----------------------
-        if (me%nc%hasVariable('quickflow')) then
-            var = me%nc%getVariable('quickflow')         ! (t,y,x) in file
-            if (allocated(me%quickflow)) deallocate(me%quickflow)
-            allocate(me%quickflow(nx,ny,nt))
-            call var%getData(me%quickflow)               ! library reverses -> (x,y,t)
-        else
-            if (allocated(me%quickflow)) deallocate(me%quickflow)
-            allocate(me%quickflow(nx,ny,nt))
-            me%quickflow = 0.0_dp
-        end if
-
-        if (me%nc%hasVariable('runoff')) then
-            var = me%nc%getVariable('runoff')
-            if (allocated(me%runoff)) deallocate(me%runoff)
-            allocate(me%runoff(nx,ny,nt))
-            call var%getData(me%runoff)
-        else
-            if (allocated(me%runoff)) deallocate(me%runoff)
-            allocate(me%runoff(nx,ny,nt))
-            me%runoff = 0.0_dp
-        end if
+        ! Total runoff (me%runoff) and surface runoff (me%quickflow) are derived
+        ! from whichever runoff components the dataset provides
+        call me%parseHydrology()
 
         if (me%nc%hasVariable('precip')) then
             var = me%nc%getVariable('precip')
@@ -764,6 +885,27 @@ contains
             if (allocated(me%evap)) deallocate(me%evap)
             allocate(me%evap(nx,ny,nt))
             me%evap = 0.0_dp
+        end if
+
+        ! Meteorological time series used by lake segments (stratification and wind
+        ! resuspension). Both optional: wind speed falls back to the scalar windSpeed
+        ! constant, solar radiation.
+        if (me%nc%hasVariable('wind_speed')) then
+            var = me%nc%getVariable('wind_speed')
+            if (allocated(me%windSpeedTimeSeries)) deallocate(me%windSpeedTimeSeries)
+            allocate(me%windSpeedTimeSeries(nx,ny,nt))
+            call var%getData(me%windSpeedTimeSeries)
+        else
+            if (allocated(me%windSpeedTimeSeries)) deallocate(me%windSpeedTimeSeries)
+        end if
+
+        if (me%nc%hasVariable('solar_radiation')) then
+            var = me%nc%getVariable('solar_radiation')
+            if (allocated(me%solarRadiation)) deallocate(me%solarRadiation)
+            allocate(me%solarRadiation(nx,ny,nt))
+            call var%getData(me%solarRadiation)
+        else
+            if (allocated(me%solarRadiation)) deallocate(me%solarRadiation)
         end if
 
         !----------------------
@@ -1102,6 +1244,25 @@ contains
         end if
 
         ! -----------------------------------
+        ! PFAS SOIL / SURFACE WATER PROPERTIES
+        ! -----------------------------------
+        ! All optional, (x,y) indexed like deposition_alpha (not transposed). Missing,
+        ! fill and negative cell values are stored as -1 so that the parameterisation
+        ! falls back cell-by-cell (see PFASParameterisationModule).
+        call readPfasMap2D('soil_organic_carbon', me%soilOrganicCarbon)
+        call readPfasMap2D('soil_ph', me%soilPh)
+        call readPfasMap2D('spm_organic_carbon', me%spmOrganicCarbon)
+        call readPfasMap2D('water_ph', me%waterPh)
+        call readPfasMap2D('soil_awi_specific_area', me%soilAwiSpecificArea)
+        ! Direct Kd maps are given in L kg-1, as in the &pfas group, and stored in m3 kg-1
+        call readPfasMap3D('pfas_kd_soil', me%pfasKdSoilMap)
+        call readPfasMap3D('pfas_kd_spm', me%pfasKdSpmMap)
+        call readPfasMap3D('pfas_kd_sediment', me%pfasKdSedimentMap)
+        call readPfasMap2D('sediment_organic_carbon', me%sedimentOrganicCarbon)
+        call readPfasMap2D('water_salinity', me%waterSalinity)
+        call readPfasMap2D('groundwater_residence_time', me%groundwaterResidenceTime)
+
+        ! -----------------------------------
         ! INITIAL CONCENTRATIONS
         ! -----------------------------------
         if (allocated(me%initialContaminantConcsSoil))      deallocate(me%initialContaminantConcsSoil)
@@ -1182,7 +1343,265 @@ contains
 
         ! Count point sources after coords are populated
         call me%calculateNPointSources(me%maxPointSources)
+
+      contains
+
+        !> Read an optional (x,y) PFAS property map. Left unallocated if absent.
+        subroutine readPfasMap2D(name, map)
+            character(len=*), intent(in)         :: name
+            real(dp), allocatable, intent(inout) :: map(:,:)
+            type(NcVariable) :: mapVar
+            if (allocated(map)) deallocate(map)
+            if (.not. me%nc%hasVariable(name)) return
+            mapVar = me%nc%getVariable(name)
+            call mapVar%getData(map)
+            if (size(map, 1) /= nx .or. size(map, 2) /= ny) then
+                call LOGR%add("DataInput: WARNING - '" // name // "' is not (x,y) on the model grid; ignored")
+                deallocate(map)
+                return
+            end if
+            map = cleanPfasMapValue(map)
+            call LOGR%add("DataInput: Read '" // name // "'")
+        end subroutine
+
+        !> Read an optional (x,y,species) Kd map given in L kg-1, storing it in m3 kg-1.
+        !! A 2D (x,y) variable is accepted when there is a single PFAS species.
+        subroutine readPfasMap3D(name, map)
+            character(len=*), intent(in)         :: name
+            real(dp), allocatable, intent(inout) :: map(:,:,:)
+            type(NcVariable) :: mapVar
+            real(dp), allocatable :: map2D(:,:)
+            if (allocated(map)) deallocate(map)
+            if (.not. me%nc%hasVariable(name)) return
+            mapVar = me%nc%getVariable(name)
+            if (mapVar%getRank() == 2 .and. nsizes == 1) then
+                call mapVar%getData(map2D)
+                allocate(map(size(map2D, 1), size(map2D, 2), 1))
+                map(:,:,1) = map2D
+            else if (mapVar%getRank() == 3) then
+                call mapVar%getData(map)
+            else
+                call LOGR%add("DataInput: WARNING - '" // name // "' must be (x,y,species); ignored")
+                return
+            end if
+            if (size(map, 1) /= nx .or. size(map, 2) /= ny .or. size(map, 3) < nsizes) then
+                call LOGR%add("DataInput: WARNING - '" // name // "' does not match (x,y,species); ignored")
+                deallocate(map)
+                return
+            end if
+            map = cleanPfasMapValue(map)
+            where (map >= 0.0_dp) map = map * 1.0e-3_dp
+            call LOGR%add("DataInput: Read '" // name // "'")
+        end subroutine
     end subroutine readBatchVariablesDatabase
+
+    !> Map fill values, NaNs and negative values to -1, the "no value here" marker
+    !! used by the PFAS parameterisation to fall back to the next option.
+    elemental function cleanPfasMapValue(x) result(y)
+        real(dp), intent(in) :: x
+        real(dp) :: y
+        if (x /= x .or. x < 0.0_dp .or. x == nf90_fill_double .or. x == real(nf90_fill_real, dp) &
+            .or. abs(x) > 1.0e30_dp) then
+            y = -1.0_dp
+        else
+            y = x
+        end if
+    end function
+
+    !> Hydrology input adapter. The model needs two runoff components per cell and
+    !! timestep: total runoff (me%runoff, which generates water inflow to reaches)
+    !! and surface/overland runoff (me%quickflow, which drives terrestrial erosion
+    !! and material delivery). Rather than requiring the input dataset to provide
+    !! exactly these, this routine maps whichever components are available - named
+    !! via the &hydrology config group - onto them:
+    !!  - total + surface:      both used directly
+    !!  - total + subsurface:   surface = max(total - subsurface, 0)
+    !!  - surface + subsurface: total = surface + subsurface
+    !!  - total only:           surface = surface_runoff_fraction * total
+    !!  - surface only:         total = surface (with warning)
+    !! All components are in m/timestep. Total runoff is the minimum requirement;
+    !! if no component is found, both are set to zero and a warning is logged.
+    subroutine parseHydrologyDatabase(me)
+        class(Database)     :: me
+        type(NcVariable)    :: var
+        integer             :: nx, ny, nt
+        real, allocatable   :: subsurfaceRunoff(:,:,:)
+        logical             :: hasTotal, hasSurface, hasSubsurface
+
+        nx = me%gridShape(1)
+        ny = me%gridShape(2)
+        nt = C%nTimeSteps
+
+        ! An empty variable name in config means "not provided by this dataset"
+        hasTotal = len_trim(C%hydrologyTotalRunoffVariable) > 0
+        if (hasTotal) hasTotal = me%nc%hasVariable(trim(C%hydrologyTotalRunoffVariable))
+        hasSurface = len_trim(C%hydrologySurfaceRunoffVariable) > 0
+        if (hasSurface) hasSurface = me%nc%hasVariable(trim(C%hydrologySurfaceRunoffVariable))
+        hasSubsurface = len_trim(C%hydrologySubsurfaceRunoffVariable) > 0
+        if (hasSubsurface) hasSubsurface = me%nc%hasVariable(trim(C%hydrologySubsurfaceRunoffVariable))
+
+        if (allocated(me%runoff)) deallocate(me%runoff)
+        if (allocated(me%quickflow)) deallocate(me%quickflow)
+        allocate(me%runoff(nx,ny,nt))
+        allocate(me%quickflow(nx,ny,nt))
+
+        if (hasTotal) then
+            var = me%nc%getVariable(trim(C%hydrologyTotalRunoffVariable))    ! (t,y,x) in file
+            call var%getData(me%runoff)                                      ! library reverses -> (x,y,t)
+        end if
+        if (hasSurface) then
+            var = me%nc%getVariable(trim(C%hydrologySurfaceRunoffVariable))
+            call var%getData(me%quickflow)
+        end if
+        if (hasSubsurface) then
+            allocate(subsurfaceRunoff(nx,ny,nt))
+            var = me%nc%getVariable(trim(C%hydrologySubsurfaceRunoffVariable))
+            call var%getData(subsurfaceRunoff)
+        end if
+
+        if (hasTotal .and. hasSurface) then
+            call LOGR%add("DataInput: Hydrology - total runoff '" // trim(C%hydrologyTotalRunoffVariable) // &
+                "' and surface runoff '" // trim(C%hydrologySurfaceRunoffVariable) // "' read from input data")
+        else if (hasSurface .and. hasSubsurface) then
+            me%runoff = me%quickflow + subsurfaceRunoff
+            call LOGR%add("DataInput: Hydrology - total runoff derived as surface ('" // &
+                trim(C%hydrologySurfaceRunoffVariable) // "') + subsurface ('" // &
+                trim(C%hydrologySubsurfaceRunoffVariable) // "') runoff")
+        else if (hasTotal .and. hasSubsurface) then
+            me%quickflow = max(me%runoff - subsurfaceRunoff, 0.0)
+            call LOGR%add("DataInput: Hydrology - surface runoff derived as total ('" // &
+                trim(C%hydrologyTotalRunoffVariable) // "') - subsurface ('" // &
+                trim(C%hydrologySubsurfaceRunoffVariable) // "') runoff, floored at zero")
+        else if (hasTotal) then
+            ! Keep the surface component exactly zero (not 0 * runoff) when the
+            ! fraction is zero, so fill values in runoff can't leak into quickflow
+            if (C%hydrologySurfaceRunoffFraction /= 0.0) then
+                me%quickflow = C%hydrologySurfaceRunoffFraction * me%runoff
+            else
+                me%quickflow = 0.0
+            end if
+            call LOGR%add("DataInput: Hydrology - only total runoff ('" // &
+                trim(C%hydrologyTotalRunoffVariable) // "') found in input data. Surface runoff set using " // &
+                "configured surface_runoff_fraction")
+        else if (hasSurface) then
+            me%runoff = me%quickflow
+            call LOGR%add("DataInput: WARNING - Hydrology - only surface runoff ('" // &
+                trim(C%hydrologySurfaceRunoffVariable) // "') found in input data. Using it as total runoff too. " // &
+                "This is only appropriate for simple tests")
+        else
+            me%runoff = 0.0
+            me%quickflow = 0.0
+            call LOGR%add("DataInput: WARNING - Hydrology - no runoff data found in input data. Total and surface " // &
+                "runoff set to 0.0. Total runoff is the minimum hydrological requirement for a meaningful run")
+        end if
+    end subroutine parseHydrologyDatabase
+
+    !> Merge the lake routing network into the main routing arrays. 'lake_outflow'
+    !! gives, for each lake/reservoir cell, the cell its segment discharges to -
+    !! the next segment of the same lake, or the river/estuary cell at the lake
+    !! outlet. These override the general 'outflow' routing for flagged cells, and
+    !! the inflow network (inflows, is_headwater, n_waterbodies) is then rebuilt
+    !! from the merged outflow field so the whole network stays consistent: a
+    !! cell's inflows are exactly the cells whose outflow points at it.
+    !! This is only called when 'lake_outflow' is present in the input data, so
+    !! datasets without a lake network are completely unaffected.
+    subroutine mergeLakeRoutingDatabase(me, lakeOutflow)
+        class(Database)     :: me
+        integer, intent(in) :: lakeOutflow(:,:,:)   !! Lake outflow targets, (d,x,y) with d = (x,y) of target cell
+        integer :: nx, ny, x, y, ox, oy, w
+        integer :: nOverridden, nInvalid, maxInflows
+        integer, allocatable :: nInflowCells(:,:)
+        integer, allocatable :: newInflows(:,:,:,:)
+        integer, parameter :: fillInt = -999
+
+        nx = me%gridShape(1)
+        ny = me%gridShape(2)
+
+        ! 1. Override the outflow of flagged lake/reservoir cells where a valid
+        !    target is given (fill/zero values leave the general routing in place)
+        nOverridden = 0
+        nInvalid = 0
+        do y = 1, ny
+            do x = 1, nx
+                if ((me%isLake(x, y) .or. me%isReservoir(x, y)) .and. me%nWaterbodies(x, y) > 0) then
+                    if (lakeOutflow(1, x, y) >= 1 .and. lakeOutflow(2, x, y) >= 1) then
+                        if (lakeOutflow(1, x, y) == x .and. lakeOutflow(2, x, y) == y) then
+                            ! A segment can't discharge to itself; keep the general routing
+                            nInvalid = nInvalid + 1
+                        else
+                            me%outflow(1:2, x, y) = lakeOutflow(1:2, x, y)
+                            nOverridden = nOverridden + 1
+                        end if
+                    end if
+                end if
+            end do
+        end do
+
+        ! 2. Count each cell's inflowing cells under the merged outflow field.
+        !    Outflows leaving the grid, or pointing at non-waterbody cells, count
+        !    as domain outflows and contribute no inflow.
+        allocate(nInflowCells(nx, ny))
+        nInflowCells = 0
+        do y = 1, ny
+            do x = 1, nx
+                if (me%nWaterbodies(x, y) > 0) then
+                    ox = me%outflow(1, x, y)
+                    oy = me%outflow(2, x, y)
+                    if (ox >= 1 .and. ox <= nx .and. oy >= 1 .and. oy <= ny) then
+                        if (me%nWaterbodies(ox, oy) > 0 .and. .not. (ox == x .and. oy == y)) then
+                            nInflowCells(ox, oy) = nInflowCells(ox, oy) + 1
+                        end if
+                    end if
+                end if
+            end do
+        end do
+
+        ! 3. Rebuild the inflows array (a cell's w-th inflow is the w-th cell found
+        !    whose outflow points at it, matching the creation-order convention in
+        !    Reach%parseInflowsAndOutflow)
+        maxInflows = max(1, maxval(nInflowCells))
+        allocate(newInflows(2, maxInflows, nx, ny))
+        newInflows = fillInt
+        nInflowCells = 0
+        do y = 1, ny
+            do x = 1, nx
+                if (me%nWaterbodies(x, y) > 0) then
+                    ox = me%outflow(1, x, y)
+                    oy = me%outflow(2, x, y)
+                    if (ox >= 1 .and. ox <= nx .and. oy >= 1 .and. oy <= ny) then
+                        if (me%nWaterbodies(ox, oy) > 0 .and. .not. (ox == x .and. oy == y)) then
+                            nInflowCells(ox, oy) = nInflowCells(ox, oy) + 1
+                            w = nInflowCells(ox, oy)
+                            newInflows(1, w, ox, oy) = x
+                            newInflows(2, w, ox, oy) = y
+                        end if
+                    end if
+                end if
+            end do
+        end do
+        call move_alloc(from=newInflows, to=me%inflows)
+
+        ! 4. Update headwater flags and waterbody (branch) counts. Cells with no
+        !    waterbodies stay empty; the number of reaches in a cell equals its
+        !    number of inflowing cells (min 1, for headwaters).
+        do y = 1, ny
+            do x = 1, nx
+                if (me%nWaterbodies(x, y) > 0) then
+                    me%isHeadwater(x, y) = nInflowCells(x, y) == 0
+                    me%nWaterbodies(x, y) = max(1, nInflowCells(x, y))
+                end if
+            end do
+        end do
+        me%maxNWaterbodies = maxval(me%nWaterbodies)
+        me%hasLakeRouting = .true.
+
+        call LOGR%add("DataInput: Merged lake routing network ('lake_outflow'): " &
+            // trim(str(nOverridden)) // " cell outflows overridden, inflow network rebuilt")
+        if (nInvalid > 0) then
+            call LOGR%add("DataInput: WARNING - " // trim(str(nInvalid)) &
+                // " 'lake_outflow' entries pointed a cell at itself and were ignored")
+        end if
+    end subroutine mergeLakeRoutingDatabase
 
     !> Get the constants from the namelist file
     subroutine parseConstantsDatabase(me, constantsFile)
@@ -1201,7 +1620,8 @@ contains
         real :: estuary_mouth_coords(2)
         integer, allocatable :: default_contaminant_size_distribution(:), default_spm_size_distribution(:), &
                             default_matrixembedded_distribution_to_spm(:), vertical_distribution(:), &
-                            harvest_in_month(:)
+                            harvest_in_month(:), prey(:)
+        real(dp), allocatable :: k_diet(:), k_death(:)
         real, allocatable :: stored_fraction(:), porosity(:), initial_mass(:), &
                             fractional_composition_distribution(:), spm_density_by_size_class(:), &
                             default_contaminant_form_distribution(:)
@@ -1226,6 +1646,33 @@ contains
         integer :: min_water_temperature_day_of_year, arable, coniferous, deciduous, grassland, &
                 heathland, urban_capped, urban_gardens, urban_parks
 
+        real(dp) :: lake_default_depth, lake_default_area_fraction, &
+            lake_stratification_radiation_threshold, lake_stratification_wind_threshold, &
+            lake_stratification_temperature_threshold, lake_epilimnion_base_depth, &
+            lake_epilimnion_wind_coefficient, lake_epilimnion_min_depth, &
+            lake_interlayer_mixing_velocity, lake_wind_resuspension_attenuation_depth, &
+            reservoir_default_release_rate
+
+        ! &pfas group (optional). Species arrays are sized from the config's n_pfas_species.
+        integer :: nPfas
+        character(len=64), allocatable :: species_names(:)
+        real(dp), allocatable :: molecular_weight(:), charge(:), pka(:), kd_soil(:), kd_spm(:), &
+            koc(:), kd_ph_slope(:), kia(:), k_mt_soil(:), k_mt_spm(:), k_mt_awi(:), &
+            reaction_rate(:,:), reaction_yield(:,:), kd_sediment(:), reaction_rate_sediment(:,:), &
+            diffusivity(:), kd_salinity_coefficient(:), kia_salinity_coefficient(:), &
+            biota_transformation_rate(:,:)
+        real(dp) :: kd_ph_reference, soil_organic_carbon, soil_ph, spm_organic_carbon, water_ph, &
+            soil_awi_specific_area, awi_geometric_factor, foam_coefficient, volatilisation_rate, &
+            sea_spray_aerosol_rate, sediment_organic_carbon, sediment_water_exchange_velocity, &
+            estuary_salinity, runoff_mixing_depth, groundwater_residence_time
+        namelist /pfas/ species_names, molecular_weight, charge, pka, kd_soil, kd_spm, koc, &
+            kd_ph_slope, kd_ph_reference, kia, k_mt_soil, k_mt_spm, k_mt_awi, reaction_rate, &
+            reaction_yield, soil_organic_carbon, soil_ph, spm_organic_carbon, water_ph, &
+            soil_awi_specific_area, awi_geometric_factor, foam_coefficient, volatilisation_rate, &
+            sea_spray_aerosol_rate, kd_sediment, sediment_organic_carbon, reaction_rate_sediment, &
+            diffusivity, sediment_water_exchange_velocity, kd_salinity_coefficient, &
+            kia_salinity_coefficient, estuary_salinity, runoff_mixing_depth, groundwater_residence_time, &
+            biota_transformation_rate
         namelist /allocatable_array_sizes/ n_default_contaminant_size_distribution, &
             n_default_spm_size_distribution, n_default_matrixembedded_distribution_to_spm, &
             n_vertical_distribution, n_initial_c_org, n_k_growth, n_name, &
@@ -1240,7 +1687,7 @@ contains
             default_contaminant_form_distribution
         namelist /biota/ initial_C_org, k_growth, k_elim_contaminant, k_uptake_contaminant, &
             name, stored_fraction, compartment, k_uptake_dissolved, k_elim_dissolved, &
-            uptake_from_form, harvest_in_month
+            uptake_from_form, harvest_in_month, prey, k_diet, k_death
         namelist /earthworm_densities/ arable, coniferous, deciduous, grassland, heathland, &
             urban_capped, urban_gardens, urban_parks, vertical_distribution
         namelist /soil/ darcy_velocity, default_porosity, hamaker_constant, particle_density, &
@@ -1256,6 +1703,12 @@ contains
         namelist /sediment/ porosity, initial_mass, fractional_composition_distribution, &
             default_spm_size_distribution, default_matrixembedded_distribution_to_spm, &
             sediment_enrichment_a, sediment_enrichment_k, spm_density_by_size_class
+        namelist /lake/ lake_default_depth, lake_default_area_fraction, &
+            lake_stratification_radiation_threshold, lake_stratification_wind_threshold, &
+            lake_stratification_temperature_threshold, lake_epilimnion_base_depth, &
+            lake_epilimnion_wind_coefficient, lake_epilimnion_min_depth, &
+            lake_interlayer_mixing_velocity, lake_wind_resuspension_attenuation_depth, &
+            reservoir_default_release_rate
 
         ! Initialize variables
         n_biota = 0
@@ -1287,6 +1740,61 @@ contains
         deposition_beta = defaultDepositionBeta
         bank_erosion_alpha = defaultBankErosionAlpha
         bank_erosion_beta = defaultBankErosionBeta
+        lake_default_depth = me%lakeDefaultDepth
+        lake_default_area_fraction = me%lakeDefaultAreaFraction
+        lake_stratification_radiation_threshold = me%lakeStratificationRadiationThreshold
+        lake_stratification_wind_threshold = me%lakeStratificationWindThreshold
+        lake_stratification_temperature_threshold = me%lakeStratificationTemperatureThreshold
+        lake_epilimnion_base_depth = me%lakeEpilimnionBaseDepth
+        lake_epilimnion_wind_coefficient = me%lakeEpilimnionWindCoefficient
+        lake_epilimnion_min_depth = me%lakeEpilimnionMinDepth
+        lake_interlayer_mixing_velocity = me%lakeInterlayerMixingVelocity
+        lake_wind_resuspension_attenuation_depth = me%lakeWindResuspensionAttenuationDepth
+        reservoir_default_release_rate = me%reservoirDefaultReleaseRate
+
+        ! &pfas defaults: everything off/zero, so an absent group gives an inert tracer
+        nPfas = max(1, C%contaminantDim(1))
+        allocate(species_names(nPfas), molecular_weight(nPfas), charge(nPfas), pka(nPfas), &
+            kd_soil(nPfas), kd_spm(nPfas), koc(nPfas), kd_ph_slope(nPfas), kia(nPfas), &
+            k_mt_soil(nPfas), k_mt_spm(nPfas), k_mt_awi(nPfas), &
+            reaction_rate(nPfas, nPfas), reaction_yield(nPfas, nPfas), kd_sediment(nPfas), &
+            reaction_rate_sediment(nPfas, nPfas), diffusivity(nPfas), kd_salinity_coefficient(nPfas), &
+            kia_salinity_coefficient(nPfas), biota_transformation_rate(nPfas, nPfas))
+        species_names = ''
+        molecular_weight = 0.0_dp
+        charge = 0.0_dp
+        pka = -999.0_dp
+        kd_soil = 0.0_dp
+        kd_spm = 0.0_dp
+        koc = 0.0_dp
+        kd_ph_slope = 0.0_dp
+        kd_ph_reference = me%pfasKdPhReference
+        kia = 0.0_dp
+        k_mt_soil = 0.0_dp
+        k_mt_spm = 0.0_dp
+        k_mt_awi = 0.0_dp
+        reaction_rate = 0.0_dp
+        reaction_yield = 0.0_dp
+        soil_organic_carbon = me%soilOrganicCarbonConstant
+        soil_ph = me%soilPhConstant
+        spm_organic_carbon = me%spmOrganicCarbonConstant
+        water_ph = me%waterPhConstant
+        soil_awi_specific_area = me%soilAwiSpecificAreaConstant
+        awi_geometric_factor = me%soilAwiGeometricFactor
+        foam_coefficient = me%pfasFoamCoefficient
+        volatilisation_rate = me%pfasVolatilisationRateScalar
+        sea_spray_aerosol_rate = me%pfasSeaSprayAerosolRate
+        kd_sediment = -1.0_dp
+        sediment_organic_carbon = me%sedimentOrganicCarbonConstant
+        reaction_rate_sediment = -1.0_dp
+        diffusivity = 0.0_dp
+        sediment_water_exchange_velocity = me%sedimentWaterExchangeVelocity
+        kd_salinity_coefficient = 0.0_dp
+        kia_salinity_coefficient = 0.0_dp
+        biota_transformation_rate = 0.0_dp
+        estuary_salinity = me%estuarySalinityConstant
+        runoff_mixing_depth = me%runoffMixingDepth
+        groundwater_residence_time = me%groundwaterResidenceTimeConstant
 
         ! Open and read the NML file
         open(iouConstants, file=constantsFile, status="old", iostat=nmlIOStat)
@@ -1439,7 +1947,11 @@ contains
                     name(me%nBiota), stored_fraction(me%nBiota), &
                     compartment(me%nBiota), k_uptake_dissolved(me%nBiota), &
                     k_elim_dissolved(me%nBiota), uptake_from_form(me%nBiota), &
-                    harvest_in_month(me%nBiota))
+                    harvest_in_month(me%nBiota), prey(me%nBiota), k_diet(me%nBiota), k_death(me%nBiota))
+            ! Optional food web and loss terms
+            prey = 0
+            k_diet = 0.0_dp
+            k_death = 0.0_dp
 
             ! Read biota namelist
             read(iouConstants, nml=biota, iostat=nmlIOStat)
@@ -1494,6 +2006,20 @@ contains
             return
         end if
         rewind(iouConstants)
+
+        ! The &lake group is optional; defaults above are kept if it is absent
+        read(iouConstants, nml=lake, iostat=nmlIOStat)
+        rewind(iouConstants)
+
+        ! The &pfas group is optional (defaults above), but a malformed one is an error
+        read(iouConstants, nml=pfas, iostat=nmlIOStat, iomsg=nmlIOMsg)
+        if (nmlIOStat > 0) then
+            call ERROR_HANDLER%trigger(error=ErrorInstance(code=200, message="Failed to read pfas namelist" &
+                // new_line('A') // trim(nmlIOMsg)))
+        else if (nmlIOStat < 0) then
+            call LOGR%add("DataInput: No &pfas group in the constants file; PFAS partitioning and " // &
+                "transformation are disabled")
+        end if
         close(iouConstants)
 
         ! Save to class variables
@@ -1547,6 +2073,10 @@ contains
             me%biotaCompartment = compartment
             me%biotaUptakeFromForm = uptake_from_form
             me%biotaHarvestInMonth = harvest_in_month
+            me%biotaPrey = prey
+            where (me%biotaPrey < 0 .or. me%biotaPrey > me%nBiota) me%biotaPrey = 0
+            me%biota_k_diet = max(0.0_dp, k_diet)
+            me%biota_k_death = max(0.0_dp, k_death)
             if (allocated(me%biota_k_uptake_contaminant)) deallocate(me%biota_k_uptake_contaminant)
             if (allocated(me%biota_k_elim_contaminant)) deallocate(me%biota_k_elim_contaminant)
             allocate(me%biota_k_uptake_contaminant(me%nBiota, C%contaminantDim(2)))
@@ -1600,15 +2130,68 @@ contains
         me%sedimentEnrichment_k = sediment_enrichment_k
         me%sedimentEnrichment_a = sediment_enrichment_a
         me%spmDensityBySizeClass = spm_density_by_size_class
+        me%lakeDefaultDepth = lake_default_depth
+        me%lakeDefaultAreaFraction = lake_default_area_fraction
+        me%lakeStratificationRadiationThreshold = lake_stratification_radiation_threshold
+        me%lakeStratificationWindThreshold = lake_stratification_wind_threshold
+        me%lakeStratificationTemperatureThreshold = lake_stratification_temperature_threshold
+        me%lakeEpilimnionBaseDepth = lake_epilimnion_base_depth
+        me%lakeEpilimnionWindCoefficient = lake_epilimnion_wind_coefficient
+        me%lakeEpilimnionMinDepth = lake_epilimnion_min_depth
+        me%lakeInterlayerMixingVelocity = lake_interlayer_mixing_velocity
+        me%lakeWindResuspensionAttenuationDepth = lake_wind_resuspension_attenuation_depth
+        me%reservoirDefaultReleaseRate = reservoir_default_release_rate
+
+        ! PFAS. Partition coefficients are converted from L kg-1 to m3 kg-1
+        me%pfasSpeciesNames = species_names
+        me%pfasMolecularWeight = molecular_weight
+        me%pfasCharge = charge
+        me%pfasPka = pka
+        me%pfasKdSoil = max(0.0_dp, kd_soil) * 1.0e-3_dp
+        me%pfasKdSpm = max(0.0_dp, kd_spm) * 1.0e-3_dp
+        me%pfasKoc = max(0.0_dp, koc) * 1.0e-3_dp
+        me%pfasKdPhSlope = kd_ph_slope
+        me%pfasKdPhReference = kd_ph_reference
+        me%pfasKia = max(0.0_dp, kia)
+        me%pfasKMtSoil = max(0.0_dp, k_mt_soil)
+        me%pfasKMtSpm = max(0.0_dp, k_mt_spm)
+        me%pfasKMtAwi = max(0.0_dp, k_mt_awi)
+        me%pfasReactionRate = max(0.0_dp, reaction_rate)
+        me%pfasReactionYield = max(0.0_dp, reaction_yield)
+        me%soilOrganicCarbonConstant = soil_organic_carbon
+        me%soilPhConstant = soil_ph
+        me%spmOrganicCarbonConstant = spm_organic_carbon
+        me%waterPhConstant = water_ph
+        me%soilAwiSpecificAreaConstant = soil_awi_specific_area
+        me%soilAwiGeometricFactor = awi_geometric_factor
+        me%pfasFoamCoefficient = foam_coefficient
+        me%pfasVolatilisationRateScalar = volatilisation_rate
+        me%pfasSeaSprayAerosolRate = sea_spray_aerosol_rate
+        ! Negative kd_sediment = not given, so the bed uses the SPM Kd
+        me%pfasKdSediment = merge(kd_sediment * 1.0e-3_dp, -1.0_dp, kd_sediment >= 0.0_dp)
+        me%sedimentOrganicCarbonConstant = sediment_organic_carbon
+        ! If any reaction_rate_sediment element was given, the matrix is the bed's own
+        ! (unset elements = 0); otherwise the bed uses reaction_rate
+        if (any(reaction_rate_sediment >= 0.0_dp)) then
+            me%pfasReactionRateSediment = max(0.0_dp, reaction_rate_sediment)
+        else
+            me%pfasReactionRateSediment = me%pfasReactionRate
+        end if
+        me%pfasDiffusivity = max(0.0_dp, diffusivity)
+        me%sedimentWaterExchangeVelocity = sediment_water_exchange_velocity
+        me%pfasKdSalinityCoefficient = kd_salinity_coefficient
+        me%pfasKiaSalinityCoefficient = kia_salinity_coefficient
+        me%pfasBiotaTransformationRate = max(0.0_dp, biota_transformation_rate)
+        me%estuarySalinityConstant = max(0.0_dp, estuary_salinity)
+        me%runoffMixingDepth = runoff_mixing_depth
+        me%groundwaterResidenceTimeConstant = groundwater_residence_time
 
     end subroutine
 
     !> Replace NetCDF fill values with zero. Emissions variables use the fill value to
     !! mean "nothing emitted here" (e.g. cells with no point source, or a point source
     !! slot that isn't occupied in this cell), so it must be zeroed before the value is
-    !! used in arithmetic. This has to happen as soon as the variable is read, because
-    !! the emissions are subsequently distributed across contaminant size classes, which
-    !! scales the fill value and makes it unrecognisable further downstream.
+    !! used in arithmetic. 
     elemental function zeroFillValue(x) result(y)
         real(dp), intent(in) :: x
         real(dp) :: y

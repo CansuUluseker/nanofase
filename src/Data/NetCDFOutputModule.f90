@@ -1,5 +1,5 @@
 module NetCDFOutputModule
-    use PFASEConstantsModule, only: PFAS_AQ, PFAS_SOL, PFAS_SPM, PFAS_AWI, PFAS_FOAM, PFAS_AIR, PFAS_NPHASES
+    use PFASConstantsModule, only: PFAS_AQ, PFAS_SOL, PFAS_SPM, PFAS_AWI, PFAS_FOAM, PFAS_AIR, PFAS_NPHASES
     use GlobalsModule, only: C, dp
     use UtilModule
     use mo_netcdf, only: NcDataset, NcVariable, NcDimension, nf90_fill_int, nf90_fill_double
@@ -39,6 +39,8 @@ module NetCDFOutputModule
         type(NcVariable)            :: nc__water__j_contaminant_deposited
         type(NcVariable)            :: nc__water__j_contaminant_resuspended
         type(NcVariable)            :: nc__water__m_spm
+        type(NcVariable)            :: nc__water__j_contaminant_foam
+        type(NcVariable)            :: nc__water__j_contaminant_atmosphere
         type(NcVariable)            :: nc__water__C_spm
         type(NcVariable)            :: nc__water__m_spm_erosion
         type(NcVariable)            :: nc__water__m_spm_deposited
@@ -83,6 +85,8 @@ module NetCDFOutputModule
         real(dp), allocatable       :: output_water__j_contaminant_deposited(:,:,:,:,:)
         real(dp), allocatable       :: output_water__j_contaminant_resuspended(:,:,:,:,:)
         real(dp), allocatable       :: output_water__m_spm(:,:,:,:)
+        real(dp), allocatable       :: output_water__j_contaminant_foam(:,:,:,:)
+        real(dp), allocatable       :: output_water__j_contaminant_atmosphere(:,:,:,:)
         real(dp), allocatable       :: output_water__C_spm(:,:,:,:)
         real(dp), allocatable       :: output_water__m_spm_erosion(:,:,:,:)
         real(dp), allocatable       :: output_water__m_spm_deposition(:,:,:,:)
@@ -238,27 +242,32 @@ module NetCDFOutputModule
 
                     me%output_water__C_contaminant(w,x,y,tInChunk)        = C_total
                     me%output_water__C_contaminant_free(w,x,y,tInChunk)   = sum(cont%get_free())    / reach%volume
-                    me%output_water__C_contaminant_attached(w,x,y,tInChunk)= sum(cont%get_attached())/ reach%volume
+                    ! Particle-bound PFAS in the water column is the SPM-sorbed slot
+                    me%output_water__C_contaminant_attached(w,x,y,tInChunk)= &
+                        sum(cont%get_phase(PFAS_SPM)) / reach%volume
 
                     me%output_water__j_contaminant_outflow(1,w,x,y,tInChunk) = &
                         sum(j_cont_outflow%c(:,:,PFAS_AQ))
                     me%output_water__j_contaminant_outflow(2,w,x,y,tInChunk) = &
-                        sum(j_cont_outflow%c(:,:,PFAS_SOL))
+                        sum(j_cont_outflow%c(:,:,PFAS_SPM))
                     me%output_water__j_contaminant_outflow(3,w,x,y,tInChunk) = sum(j_cont_outflow%c(:,:,PFAS_AQ))
 
                     me%output_water__j_contaminant_deposited(1,w,x,y,tInChunk) = &
                         sum(j_cont_deposited%c(:,:,PFAS_AQ))
                     me%output_water__j_contaminant_deposited(2,w,x,y,tInChunk) = &
-                        sum(j_cont_deposited%c(:,:,PFAS_SOL))
+                        sum(j_cont_deposited%c(:,:,PFAS_SPM))
                     me%output_water__j_contaminant_deposited(3,w,x,y,tInChunk) = sum(j_cont_deposited%c(:,:,PFAS_AQ))
 
                     me%output_water__j_contaminant_resuspended(1,w,x,y,tInChunk) = &
                         sum(j_cont_resuspended%c(:,:,PFAS_AQ))
                     me%output_water__j_contaminant_resuspended(2,w,x,y,tInChunk) = &
-                        sum(j_cont_resuspended%c(:,:,PFAS_SOL))
+                        sum(j_cont_resuspended%c(:,:,PFAS_SPM))
                     me%output_water__j_contaminant_resuspended(3,w,x,y,tInChunk) = sum(j_cont_resuspended%c(:,:,PFAS_AQ))
 
                     me%output_water__m_spm(w,x,y,tInChunk) = sum(reach%m_spm)
+                    me%output_water__j_contaminant_foam(w,x,y,tInChunk) = total_or_zero(reach%j_contaminant_foam)
+                    me%output_water__j_contaminant_atmosphere(w,x,y,tInChunk) = &
+                        total_or_zero(reach%j_contaminant_atmosphere)
                     me%output_water__C_spm(w,x,y,tInChunk) = sum(reach%C_spm)
 
                     if (C%includeSedimentFluxes) then
@@ -300,6 +309,10 @@ module NetCDFOutputModule
                         sum(j_cont_resuspended%c(:,:,PFAS_SPM)) ], start=[1, w, x, y, t])
 
                     call me%nc__water__m_spm%setData(sum(reach%m_spm), start=[w,x,y,t])
+                    call me%nc__water__j_contaminant_foam%setData( &
+                        total_or_zero(reach%j_contaminant_foam), start=[w,x,y,t])
+                    call me%nc__water__j_contaminant_atmosphere%setData( &
+                        total_or_zero(reach%j_contaminant_atmosphere), start=[w,x,y,t])
                     call me%nc__water__C_spm%setData(sum(reach%C_spm), start=[w,x,y,t])
 
                     if (C%includeSedimentFluxes) then
@@ -464,7 +477,6 @@ module NetCDFOutputModule
         end do
     end subroutine
 
-    !> Update either the NetCDF file or the in-memory output variables on this time step
     !> Update either the NetCDF file or the in-memory output variables on this time step
     subroutine updateSoilNetCDFOutput(me, t, tInChunk, x, y)
         class(NetCDFOutput) :: me
@@ -750,6 +762,20 @@ module NetCDFOutputModule
         'Mass of suspended particulate matter in surface water')
         call me%nc__water__m_spm%setAttribute('grid_mapping', 'spatial_ref')
         call me%nc__water__m_spm%setAttribute('_FillValue', nf90_fill_double)
+        me%nc__water__j_contaminant_foam = me%nc%setVariable('water__j_contaminant_foam', 'f64', &
+            [me%w_dim, me%x_dim, me%y_dim, me%t_dim])
+        call me%nc__water__j_contaminant_foam%setAttribute('units', 'kg/timestep')
+        call me%nc__water__j_contaminant_foam%setAttribute('long_name', &
+            'PFAS exported from the water surface (air-water interface) to foam; negative = loss')
+        call me%nc__water__j_contaminant_foam%setAttribute('grid_mapping', 'spatial_ref')
+        call me%nc__water__j_contaminant_foam%setAttribute('_FillValue', nf90_fill_double)
+        me%nc__water__j_contaminant_atmosphere = me%nc%setVariable('water__j_contaminant_atmosphere', 'f64', &
+            [me%w_dim, me%x_dim, me%y_dim, me%t_dim])
+        call me%nc__water__j_contaminant_atmosphere%setAttribute('units', 'kg/timestep')
+        call me%nc__water__j_contaminant_atmosphere%setAttribute('long_name', &
+            'PFAS lost to the atmosphere by volatilisation and sea-spray aerosol; negative = loss')
+        call me%nc__water__j_contaminant_atmosphere%setAttribute('grid_mapping', 'spatial_ref')
+        call me%nc__water__j_contaminant_atmosphere%setAttribute('_FillValue', nf90_fill_double)
         me%nc__water__C_spm = me%nc%setVariable('water__C_spm', 'f64', [me%w_dim, me%x_dim, me%y_dim, me%t_dim])
         call me%nc__water__C_spm%setAttribute('units', 'kg/m3')
         call me%nc__water__C_spm%setAttribute('long_name', &
@@ -1013,8 +1039,6 @@ module NetCDFOutputModule
         ny_in = size(DATASET%soilBulkDensity, 1)
         nx_in = size(DATASET%soilBulkDensity, 2)
 
-        ! HACK to address https://github.com/NERC-CEH/nanofase/pull/10/files#r2432863960
-        ! and https://github.com/NERC-CEH/nanofase/pull/10#issuecomment-3285937997:
         ! Transposing soil bulk density back to (x,y) so that the order in the NetCDF file
         ! is (y,x)
 
@@ -1095,6 +1119,10 @@ module NetCDFOutputModule
 
         allocate(me%output_water__m_spm(1:nw, 1:nx, 1:ny, 1:nt))
         me%output_water__m_spm = nf90_fill_double
+        allocate(me%output_water__j_contaminant_foam(1:nw, 1:nx, 1:ny, 1:nt))
+        me%output_water__j_contaminant_foam = nf90_fill_double
+        allocate(me%output_water__j_contaminant_atmosphere(1:nw, 1:nx, 1:ny, 1:nt))
+        me%output_water__j_contaminant_atmosphere = nf90_fill_double
 
         allocate(me%output_water__C_spm(1:nw, 1:nx, 1:ny, 1:nt))
         me%output_water__C_spm = nf90_fill_double
@@ -1232,6 +1260,9 @@ module NetCDFOutputModule
         call me%nc__water__j_contaminant_deposited%setData(me%output_water__j_contaminant_deposited,start=[1,1,1,1,tStart])
         call me%nc__water__j_contaminant_resuspended%setData(me%output_water__j_contaminant_resuspended,start=[1,1,1,1,tStart])
         call me%nc__water__m_spm%setData(               me%output_water__m_spm,               start=[1,1,1,tStart])
+        call me%nc__water__j_contaminant_foam%setData(me%output_water__j_contaminant_foam, start=[1,1,1,tStart])
+        call me%nc__water__j_contaminant_atmosphere%setData(me%output_water__j_contaminant_atmosphere, &
+            start=[1,1,1,tStart])
         call me%nc__water__C_spm%setData(               me%output_water__C_spm,               start=[1,1,1,tStart])
 
         if (C%includeSedimentFluxes) then
@@ -1279,6 +1310,8 @@ module NetCDFOutputModule
         if (allocated(me%output_water__j_contaminant_deposited))deallocate(me%output_water__j_contaminant_deposited)
         if (allocated(me%output_water__j_contaminant_resuspended))deallocate(me%output_water__j_contaminant_resuspended)
         if (allocated(me%output_water__m_spm))                 deallocate(me%output_water__m_spm)
+        if (allocated(me%output_water__j_contaminant_foam)) deallocate(me%output_water__j_contaminant_foam)
+        if (allocated(me%output_water__j_contaminant_atmosphere)) deallocate(me%output_water__j_contaminant_atmosphere)
         if (allocated(me%output_water__C_spm))                 deallocate(me%output_water__C_spm)
         if (allocated(me%output_water__m_spm_erosion))         deallocate(me%output_water__m_spm_erosion)
         if (allocated(me%output_water__m_spm_deposition))      deallocate(me%output_water__m_spm_deposition)
@@ -1387,5 +1420,13 @@ module NetCDFOutputModule
         end do
         
     end subroutine
+
+    !> Total mass in a flux holder (all species, forms and phases), zero if unallocated
+    function total_or_zero(cont) result(m)
+        type(Contaminant), intent(in) :: cont
+        real(dp) :: m
+        m = 0.0_dp
+        if (allocated(cont%c)) m = sum(cont%c)
+    end function
 
 end module

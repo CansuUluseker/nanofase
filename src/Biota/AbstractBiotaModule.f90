@@ -31,12 +31,23 @@ module AbstractBiotaModule
         character(len=32) :: uptakeFromPhase = "water_aq"
         integer :: harvestInMonth = 0
 
+        ! Food web: dietary uptake k_diet * C_diet, with C_diet the whole-body burden
+        ! of the prey organism (set by the compartment via update_diets before update)
+        integer :: preyIndex = 0                  !! DATASET biota index of the prey, 0 = none
+        real(dp) :: k_diet = 0.0_dp               !! Feeding rate x assimilation efficiency [/day]
+        real(dp), allocatable :: C_diet(:)        !! Prey burden per species [kg kg-1]
+
     contains
         procedure, public :: create => createAbstractBiota
         procedure, public :: update => updateAbstractBiota
         procedure, public :: parseInputData => parseInputDataAbstractBiota
         procedure, public :: finalise => finaliseAbstractBiota
+        procedure, public :: burden => burdenAbstractBiota
+        procedure, public :: uptake => uptakeAbstractBiota
+        procedure, public :: transformBurden => transformBurdenAbstractBiota
     end type
+
+    public :: update_diets
 
 contains
 
@@ -56,7 +67,7 @@ contains
         end if
 
         allocate(me%C_active(nSpecies), me%C_stored(nSpecies), &
-                 me%k_uptake(nSpecies), me%k_elim(nSpecies), stat=allocStat)
+                 me%k_uptake(nSpecies), me%k_elim(nSpecies), me%C_diet(nSpecies), stat=allocStat)
 
         if (allocStat /= 0) then
             err(1) = ErrorInstance(code=901, message="Allocation failed for P-FASE biota arrays")
@@ -68,6 +79,7 @@ contains
         me%C_stored = 0.0_dp
         me%k_uptake = 0.0_dp
         me%k_elim = 0.0_dp
+        me%C_diet = 0.0_dp
 
         call rslt%addErrors(.errors. me%parseInputData())
     end function createAbstractBiota
@@ -99,7 +111,13 @@ contains
 
         me%name = DATASET%biotaName(me%biotaIndex)
         me%k_growth = DATASET%biota_k_growth(me%biotaIndex)
-        me%k_death = DATASET%biota_k_death(me%biotaIndex)
+        me%k_death = 0.0_dp
+        if (allocated(DATASET%biota_k_death)) me%k_death = DATASET%biota_k_death(me%biotaIndex)
+        me%preyIndex = 0
+        if (allocated(DATASET%biotaPrey)) me%preyIndex = DATASET%biotaPrey(me%biotaIndex)
+        if (me%preyIndex == me%biotaIndex) me%preyIndex = 0
+        me%k_diet = 0.0_dp
+        if (allocated(DATASET%biota_k_diet)) me%k_diet = DATASET%biota_k_diet(me%biotaIndex)
         me%storedFraction = max(0.0_dp, min(1.0_dp, DATASET%biotaStoredFraction(me%biotaIndex)))
 
         ! Backward compatible: old DATASET field is reinterpreted as PFAS phase source.
@@ -157,6 +175,9 @@ contains
         if (allocated(me%C_stored)) deallocate(me%C_stored)
         if (allocated(me%k_uptake)) deallocate(me%k_uptake)
         if (allocated(me%k_elim)) deallocate(me%k_elim)
+        if (allocated(me%C_diet)) deallocate(me%C_diet)
+        me%preyIndex = 0
+        me%k_diet = 0.0_dp
 
         me%ref = ""
         me%name = ""
@@ -167,5 +188,78 @@ contains
         me%uptakeFromPhase = "water_aq"
         me%harvestInMonth = 0
     end subroutine finaliseAbstractBiota
+
+    !> Uptake flux of species i per unit body mass [kg kg-1 day-1]: from the
+    !! environment, k_uptake * exposure, plus from the diet, k_diet * C_diet
+    function uptakeAbstractBiota(me, i, exposure) result(u)
+        class(AbstractBiota), intent(in) :: me
+        integer, intent(in)  :: i
+        real(dp), intent(in) :: exposure
+        real(dp) :: u
+        u = me%k_uptake(i) * exposure
+        if (allocated(me%C_diet)) then
+            if (i <= size(me%C_diet)) u = u + me%k_diet * max(0.0_dp, me%C_diet(i))
+        end if
+    end function
+
+    !> Whole-body burden per species (active + stored) [kg kg-1]
+    function burdenAbstractBiota(me) result(b)
+        class(AbstractBiota), intent(in) :: me
+        real(dp) :: b(max(1, C%contaminantDim(1)))
+        b = 0.0_dp
+        if (allocated(me%C_active)) b(:size(me%C_active)) = me%C_active
+        if (allocated(me%C_stored)) b(:size(me%C_stored)) = b(:size(me%C_stored)) + me%C_stored
+    end function
+
+    !> In-organism metabolism of precursors to other species (e.g. 8:2 FTOH -> PFOA,
+    !! EtFOSE -> PFOS) in the active burden over dt_days, first order with the &pfas
+    !! biota_transformation_rate(i,j) [/day] and reaction_yield(i,j), branching as in
+    !! the environmental transformation network.
+    subroutine transformBurdenAbstractBiota(me, dt_days)
+        class(AbstractBiota), intent(inout) :: me
+        real(dp), intent(in) :: dt_days
+        real(dp), allocatable :: delta(:)
+        real(dp) :: k_total, loss, yield
+        integer :: i, j, n
+        if (.not. allocated(me%C_active) .or. .not. allocated(DATASET%pfasBiotaTransformationRate)) return
+        n = min(size(me%C_active), size(DATASET%pfasBiotaTransformationRate, 1))
+        allocate(delta(size(me%C_active)))
+        delta = 0.0_dp
+        do i = 1, n
+            k_total = 0.0_dp
+            do j = 1, n
+                if (j /= i) k_total = k_total + DATASET%pfasBiotaTransformationRate(i,j)
+            end do
+            if (k_total <= 0.0_dp) cycle
+            loss = max(0.0_dp, me%C_active(i)) * (1.0_dp - exp(-k_total * dt_days))
+            delta(i) = delta(i) - loss
+            do j = 1, n
+                if (j == i .or. DATASET%pfasBiotaTransformationRate(i,j) <= 0.0_dp) cycle
+                yield = 0.0_dp
+                if (allocated(DATASET%pfasReactionYield)) yield = DATASET%pfasReactionYield(i,j)
+                delta(j) = delta(j) + loss * DATASET%pfasBiotaTransformationRate(i,j) / k_total * yield
+            end do
+        end do
+        me%C_active = max(0.0_dp, me%C_active + delta)
+    end subroutine
+
+    !> Set each organism's dietary exposure to the current burden of its prey among
+    !! the organisms of the same compartment. A prey updated later in the same time
+    !! step contributes its previous-step burden (explicit coupling).
+    subroutine update_diets(biota)
+        class(AbstractBiota), intent(inout) :: biota(:)
+        integer :: i, j
+        do i = 1, size(biota)
+            if (.not. allocated(biota(i)%C_diet)) cycle
+            biota(i)%C_diet = 0.0_dp
+            if (biota(i)%preyIndex <= 0 .or. biota(i)%k_diet <= 0.0_dp) cycle
+            do j = 1, size(biota)
+                if (biota(j)%biotaIndex == biota(i)%preyIndex) then
+                    biota(i)%C_diet = biota(j)%burden()
+                    exit
+                end if
+            end do
+        end do
+    end subroutine
 
 end module AbstractBiotaModule

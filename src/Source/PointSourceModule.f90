@@ -3,7 +3,7 @@ module PointSourceModule
     use ResultModule
     use DataInputModule, only: DATASET
     use ContaminantModule
-    use PFASEConstantsModule
+    use PFASConstantsModule
     use netcdf, only: nf90_fill_double
     implicit none
    

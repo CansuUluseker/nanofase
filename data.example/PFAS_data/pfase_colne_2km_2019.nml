@@ -1,0 +1,119 @@
+!! ============================================================================
+!! P-FASE RUNTIME CONFIG: COLNE 2 km, 2019
+!! ============================================================================
+
+&allocatable_array_sizes
+    n_soil_layers = 3
+    n_sediment_layers = 4
+
+    !! Compatibility allocation; P-FASE reinterprets this dimension as species.
+    n_contaminant_size_classes = 1
+
+    n_spm_size_classes = 5
+    n_fractional_compositions = 2
+/
+
+&contaminant
+    !! Explicit P-FASE dimensions.
+    n_pfas_species = 1
+    n_pfas_forms = 1
+
+    !! Legacy fields kept defined for compatibility.
+    n_contaminant_forms = 1
+    n_contaminant_extra_states = 6
+    contaminant_size_classes = 1.0e-9
+/
+
+&data
+    input_file = "/users/pollution/canulu/Desktop/nanofase/data.example/PFAS_data/output/colne_pfase_2km_2019.nc"
+    constants_file = "/users/pollution/canulu/Desktop/nanofase/data.example/PFAS_data/constants_colne_pfase_2km_2019.nml"
+    output_path = "/users/pollution/canulu/Desktop/nanofase/data.example/PFAS_data/model_output/"
+/
+
+&output
+    write_csv = .true.
+    write_netcdf = .true.
+    netcdf_write_mode = 'end'
+    write_metadata_as_comment = .true.
+
+    include_waterbody_breakdown = .false.
+    include_sediment_layer_breakdown = .true.
+    include_soil_layer_breakdown = .false.
+    include_soil_state_breakdown = .false.
+    include_spm_size_class_breakdown = .false.
+
+    soil_pec_units = 'kg/kg'
+    sediment_pec_units = 'kg/kg'
+
+    include_soil_erosion_yields = .true.
+    include_sediment_fluxes = .true.
+    write_compartment_stats = .true.
+/
+
+&run
+    description = "Colne catchment P-FASE, 2 km, CEH-GEAR 2019 rainfall"
+    write_to_log = .true.
+
+    timestep = 86400
+    n_timesteps = 365
+    start_date = "2019-01-01"
+
+    epsilon = 1e-20
+    error_output = .true.
+    trigger_warnings = .true.
+
+    log_file_path = "/users/pollution/canulu/Desktop/nanofase/data.example/PFAS_data/output/"
+    output_hash = ""
+
+    ignore_contaminant = .false.
+    warm_up_period = 0
+    simulation_mask = ""
+    bash_colors = .true.
+/
+
+&checkpoint
+    checkpoint_file = "/users/pollution/canulu/Desktop/nanofase/data.example/PFAS_data/checkpoint.dat"
+    save_checkpoint = .false.
+    reinstate_checkpoint = .false.
+    preserve_timestep = .false.
+    save_checkpoint_after_warm_up = .false.
+/
+
+&steady_state
+    run_to_steady_state = .false.
+    mode = 'pfas_mass'
+    delta = 1e-4
+/
+
+&soil
+    soil_layer_depth = 0.05, 0.15, 0.20
+
+    !! Nanoparticle attachment is not PFAS sorption.
+    include_attachment = .false.
+
+    include_bioturbation = .false.
+    include_soil_erosion = .true.
+    include_clay_enrichment = .false.
+/
+
+&sediment
+    sediment_layer_depth = 0.01, 0.01, 0.01, 0.01
+    spm_size_classes = 0.002e-3, 0.06e-3, 0.2e-3, 0.6e-3, 2.0e-3
+    include_bed_sediment = .true.
+    sediment_particle_densities = 1500, 2600
+/
+
+&water
+    min_stream_slope = 0.0001
+    min_estuary_timestep = 3600
+
+    !! First integration run is freshwater only.
+    include_estuary = .false.
+
+    !! Spatial bank-erosion parameters need validation, so keep off initially.
+    include_bank_erosion = .false.
+/
+
+&sources
+    include_point_sources = .false.
+/
