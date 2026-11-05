@@ -19,6 +19,7 @@ The `&output` group in the [model config file](../../config.example/config.examp
 - `include_soil_layer_breakdown`: Should data for each soil layer be output, or only summaries of the whole soil profile? *Defaults to true.*
 - `include_soil_state_breakdown`: Should the breakdown of soil NM into free and attached states be output? Bear in mind that outputting a layer and state breakdown may result in particularly large output files. *Defaults to false.*
 - `include_sediment_fluxes`: Should the fluxes of sediment from/to waterbodies be included in the output (e.g. soil erosion, bank erosion, deposition/resuspension).
+- `output_variables`: A list of NetCDF output variable names to write, e.g. `output_variables = 'water__C_spm', 'water__flow'`. Variables not listed are not written to the NetCDF file, which can make it much smaller (useful for calibration and other runs that only need a few variables). *Defaults to empty, which writes every variable.*
 
 In addition, two options to specific the units for concentrations (kg/m3 or kg/kg) in soils and sediments will soon be available: `soil_pec_units` and `sediment_pec_units`. Watch this space.
 

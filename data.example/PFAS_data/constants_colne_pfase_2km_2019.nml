@@ -40,9 +40,6 @@
     hamaker_constant = 6.9e-21
     particle_density = 2500.0
 
-    !! Do not use nanoparticle attachment as PFAS sorption.
-    soil_constant_attachment_efficiency = 0.0
-
     erosivity_a1 = 6.608
     erosivity_a2 = 0.5
     erosivity_a3 = 2.7
@@ -90,8 +87,8 @@
 &sediment
     porosity = 0.8, 0.6, 0.4, 0.2
 
-    !! Current DataInputModule namelist variable name:
-    sedimentInitialMass = 0.02, 0.02, 0.32, 0.32, 0.32
+    !! Initial bed sediment mass per size class [kg/m2]:
+    initial_mass = 0.02, 0.02, 0.32, 0.32, 0.32
 
     fractional_composition_distribution = 0.5, 0.5
     default_spm_size_distribution = 50, 30, 10, 7, 3

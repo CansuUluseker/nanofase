@@ -28,23 +28,47 @@ This selection of parameters pertains to the geographical region modelled, such 
 (input-data:dem)=
 `int dem(y, x)`
 : *Optional, if not present then default slope of 0.0005 m/m is assumed. Units: dm. Standard name: `height_above_mean_sea_level`.* \
-Digital elevation model (height above mean sea level). In the model, this is only used to calculate slope, whilst in the NanoFASE data module, it is used to calculate numerous [secondary variables](netcdf-namelist-input:secondary-derived-variables) for input to the model.
+Digital elevation model (height above mean sea level). In the model, this is only used to calculate reach slope (floored at the `min_stream_slope` config option, default 0.0001 m/m), whilst in the NanoFASE data module, it is used to calculate numerous [secondary variables](netcdf-namelist-input:secondary-derived-variables) for input to the model.
 
 `float quickflow(t, y, x)`
-: *Required. Units: m/timestep. Standard name: `surface_runoff_flux`.* \
-Also called surface runoff, this is the component of runoff that is responsible for driving soil erosion.
+: *Required, unless derived from other runoff components (see [](input-data:hydrology)). Units: m/timestep. Standard name: `surface_runoff_flux`.* \
+Also called surface runoff, this is the component of runoff that is responsible for driving soil erosion delivery to water bodies and the wash-off of dissolved contaminant from the soil. The variable name is set by `surface_runoff_variable` in the `&hydrology` config group.
 
 `float runoff(t, y, x)`
-: *Required. Units: m/timestep. Standard name: `runoff_flux`.* \
-This is the total runoff (subsurface and surface) that is routed by the model to provide surface water flows.
+: *Required, unless derived from other runoff components (see [](input-data:hydrology)). Units: m/timestep. Standard name: `runoff_flux`.* \
+This is the total runoff (subsurface and surface) that is routed by the model to provide surface water flows. The variable name is set by `total_runoff_variable` in the `&hydrology` config group.
+
+`float <subsurface runoff>(t, y, x)`
+: *Optional, only read if named by `subsurface_runoff_variable` in the `&hydrology` config group. Units: m/timestep.* \
+Sub-surface runoff, used to derive total or surface runoff when only one of them is provided (see [](input-data:hydrology)).
 
 `float precip(t, y, x)`
-: *Required. Units: m/timestep. Standard name: `rainfall_flux`.* \
-Amount of precipitation, used to drive soil percolation.
+: *Optional, defaults to 0. Units: m/timestep. Standard name: `rainfall_flux`.* \
+Amount of precipitation, used to drive soil percolation and soil erosion.
 
 `float evap(t, y, x)`
 : *Optional, defaults to 0. Units: m/timestep. Standard name: `water_evapotranspiration_flux`.* \
-Amount of evapotranspiration.
+Amount of evapotranspiration, subtracted from precipitation to give the water entering the soil.
+
+`float gw_residence_time(y, x)`
+: *Optional, defaults to `residence_time` in the `&groundwater` constants group. Units: days.* \
+Residence time of water in each grid cell's groundwater store (see [](input-data:groundwater)). Zero, negative or fill values fall back to the constant.
+
+`float gw_loss_fraction(y, x)`
+: *Optional, defaults to `loss_fraction` in the `&groundwater` constants group. Unitless.* \
+Fraction of each grid cell's groundwater recharge that leaves the model. Negative or fill values fall back to the constant.
+
+`float gw_subsurface_recharge_fraction(y, x)`
+: *Optional, defaults to `subsurface_recharge_fraction` in the `&groundwater` constants group. Unitless.* \
+Fraction of each grid cell's sub-surface runoff that recharges the groundwater store. Negative or fill values fall back to the constant.
+
+`float gw_surface_recharge_fraction(y, x)`
+: *Optional, defaults to `surface_recharge_fraction` in the `&groundwater` constants group. Unitless.* \
+Fraction of each grid cell's surface runoff that recharges the groundwater store. Negative or fill values fall back to the constant.
+
+`float river_manning_n(y, x)`
+: *Optional, defaults to `river_manning_n` in the `&water` constants group. Units: s/m<sup>1/3</sup>.* \
+Manning's roughness coefficient of river channels in each grid cell (see [](input-data:routing)). Zero, negative or fill values fall back to the constant.
 
 (netcdf-namelist:soil-bulk-density)=
 `float soil_bulk_density(y, x)`
@@ -333,6 +357,14 @@ The rate at which pristine NM transforms to the `transformed` form.
 : *Optional, defaults to calculation based on grid size, unitless.* \
 Meandering factor to account for rivers not being straight lines. If not present, meandering factor is estimated from the grid cell size, according to $f_m = 1.024 - 0.077 * \ln (200 / (dx + dy))$ {cite:p}`fekete_2001`.
 
+`river_manning_n`
+: *Optional, defaults to 0.035, units: s/m<sup>1/3</sup>.* \
+Manning's roughness coefficient of river channels. Can be overridden per grid cell by the `river_manning_n` NetCDF variable. See [](input-data:routing).
+
+`routing_celerity_factor`
+: *Optional, defaults to 1.0, unitless.* \
+Multiplier on the kinematic wave celerity used by channel routing (only used when `include_routing` is on in the config file). See [](input-data:routing).
+
 `[min|max]_water_temperature`
 : *Optional, defaults to 4<sup>o</sup>C (min) or 21<sup>o</sup>C (max), units: <sup>o</sup>C.* \
 Average minimum or maximum water temperature across the year. Calculates daily water temperature timeseries using a cosine curve based on these values.
@@ -453,6 +485,21 @@ If spatial sediment calibration parameters (see [](netcdf-namelist-input:calibra
   sediment_transport_b = 0.0_dp
   sediment_transport_c = 0.2_dp
 \
+```
+
+(netcdf-namelist-input:groundwater)=
+### `groundwater` group
+
+This optional group configures the groundwater store for water (see [](input-data:groundwater) and [](hydrology:groundwater-store)). If it is left out, the store is switched off.
+
+```
+&groundwater
+    residence_time = -1.0               ! [days], <= 0 = store off (default)
+    subsurface_recharge_fraction = 1.0  ! [-]
+    surface_recharge_fraction = 0.0     ! [-]
+    loss_fraction = 0.0                 ! [-]
+    initial_storage = -1.0              ! [m], < 0 = steady state with the mean recharge (default)
+/
 ```
 
 (netcdf-namelist-input:earthworms)=

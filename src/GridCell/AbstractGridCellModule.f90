@@ -51,6 +51,8 @@ module AbstractGridCellModule
         real, allocatable               :: q_evap_timeSeries(:)                 !! Evaporation time series [m/s]
         real, allocatable               :: q_precip_timeSeries(:)               !! Precipitation time series [m/s]
         real(dp)                        :: q_runoff                             !! Runoff from the hydrological model for this time step [m/timestep]
+        real(dp)                        :: gwStorage = -1.0_dp                  !! Water in the groundwater store, per unit cell area [m]; < 0 = not yet initialised
+        real(dp), allocatable           :: gwStorage_t(:)                       !! Groundwater store at the end of each timestep of the current batch [m] (for checkpoints)
         real(dp)                        :: Q_out                                !! Discharge from this `GridCell` on a given timestep [m3/timestep]
         real(dp)                        :: tmp_Q_out                            !! Temporary storage for Q_out until all `GridCell`s have been processed
         real(dp)                        :: j_spm_out                            !! SPM discharge from this GridCell on a given timestep [kg/timestep]

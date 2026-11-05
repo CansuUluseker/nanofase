@@ -196,55 +196,55 @@ contains
                     me%output_agg_water__flow(  x, y, tInChunk) = cell%get_Q_outflow() / C%timeStep
 
                 else if (C%netCDFWriteMode == 'itr') then
-                    call me%nc__water__m_contaminant%setData([ &
+                    if (wantOutput('water__m_contaminant')) call me%nc__water__m_contaminant%setData([ &
                         sum(m_contaminant%c(:,:,PFAS_AQ)), &
                         sum(m_contaminant%c(:,:,PFAS_SOL)), &
                         sum(m_contaminant%c(:,:,PFAS_AQ)) ], start=[1, x, y, t])
 
-                    call me%nc__water__C_contaminant%setData([ &
+                    if (wantOutput('water__C_contaminant')) call me%nc__water__C_contaminant%setData([ &
                         C_contaminant, &
                         C_contaminant, &
                         C_dissolved ], start=[1, x, y, t])
 
                     if (C%includeSoilStateBreakdown) then
-                        call me%nc__water__C_contaminant_free%setData( &
+                        if (wantOutput('water__C_contaminant_free')) call me%nc__water__C_contaminant_free%setData( &
                             sum(m_contaminant%get_free()) / cell%getWaterVolume(), start=[x, y, t])
-                        call me%nc__water__C_contaminant_attached%setData( &
+                        if (wantOutput('water__C_contaminant_attached')) call me%nc__water__C_contaminant_attached%setData( &
                             sum(m_contaminant%get_attached()) / cell%getWaterVolume(), start=[x, y, t])
                     end if
 
-                    call me%nc__water__j_contaminant_outflow%setData([ &
+                    if (wantOutput('water__j_contaminant_outflow')) call me%nc__water__j_contaminant_outflow%setData([ &
                         sum(j_contaminant_outflow%c(:,:,PFAS_AQ)), &
                         sum(j_contaminant_outflow%c(:,:,PFAS_SOL)), &
                         sum(j_contaminant_outflow%c(:,:,PFAS_AQ)) ], start=[1, x, y, t])
 
-                    call me%nc__water__j_contaminant_deposited%setData([ &
+                    if (wantOutput('water__j_contaminant_deposited')) call me%nc__water__j_contaminant_deposited%setData([ &
                         sum(j_contaminant_deposited%c(:,:,PFAS_AQ)), &
                         sum(j_contaminant_deposited%c(:,:,PFAS_SOL)), &
                         sum(j_contaminant_deposited%c(:,:,PFAS_AQ)) ], start=[1, x, y, t])
 
-                    call me%nc__water__j_contaminant_resuspended%setData([ &
+                    if (wantOutput('water__j_contaminant_resuspended')) call me%nc__water__j_contaminant_resuspended%setData([ &
                         sum(j_contaminant_resuspended%c(:,:,PFAS_AQ)), &
                         sum(j_contaminant_resuspended%c(:,:,PFAS_SOL)), &
                         sum(j_contaminant_resuspended%c(:,:,PFAS_AQ)) ], start=[1, x, y, t])
 
-                    call me%nc__water__m_spm%setData(sum(cell%get_m_spm()), start=[x, y, t])
-                    call me%nc__water__C_spm%setData(sum(cell%get_C_spm()), start=[x, y, t])
+                    if (wantOutput('water__m_spm')) call me%nc__water__m_spm%setData(sum(cell%get_m_spm()), start=[x, y, t])
+                    if (wantOutput('water__C_spm')) call me%nc__water__C_spm%setData(sum(cell%get_C_spm()), start=[x, y, t])
 
                     if (C%includeSedimentFluxes) then
-                        call me%nc__water__m_spm_erosion%setData(   sum(cell%get_j_spm_soilErosion()), start=[x, y, t])
-                        call me%nc__water__m_spm_deposited%setData( sum(cell%get_j_spm_deposition()), start=[x, y, t])
-                        call me%nc__water__m_spm_resuspended%setData(sum(cell%get_j_spm_resuspension()), start=[x, y, t])
-                        call me%nc__water__m_spm_inflow%setData(    sum(cell%get_j_spm_inflow()),      start=[x, y, t])
-                        call me%nc__water__m_spm_outflow%setData(   sum(cell%get_j_spm_outflow()),     start=[x, y, t])
-                        call me%nc__water__m_spm_bank_erosion%setData(sum(cell%get_j_spm_bankErosion()), start=[x, y, t])
+                        if (wantOutput('water__m_spm_erosion')) call me%nc__water__m_spm_erosion%setData(   sum(cell%get_j_spm_soilErosion()), start=[x, y, t])
+                        if (wantOutput('water__m_spm_deposited')) call me%nc__water__m_spm_deposited%setData( sum(cell%get_j_spm_deposition()), start=[x, y, t])
+                        if (wantOutput('water__m_spm_resuspended')) call me%nc__water__m_spm_resuspended%setData(sum(cell%get_j_spm_resuspension()), start=[x, y, t])
+                        if (wantOutput('water__m_spm_inflow')) call me%nc__water__m_spm_inflow%setData(    sum(cell%get_j_spm_inflow()),      start=[x, y, t])
+                        if (wantOutput('water__m_spm_outflow')) call me%nc__water__m_spm_outflow%setData(   sum(cell%get_j_spm_outflow()),     start=[x, y, t])
+                        if (wantOutput('water__m_spm_bank_erosion')) call me%nc__water__m_spm_bank_erosion%setData(sum(cell%get_j_spm_bankErosion()), start=[x, y, t])
                     end if
 
-                    call me%nc__water__volume%setData(volume, start=[x, y, t])
-                    call me%nc__water__j_contaminant_foam%setData(j_foam, start=[x, y, t])
-                    call me%nc__water__j_contaminant_atmosphere%setData(j_air, start=[x, y, t])
-                    call me%nc__water__depth%setData(cell%getWaterDepth(), start=[x, y, t])
-                    call me%nc__water__flow%setData(cell%get_Q_outflow() / C%timeStep, start=[x, y, t])
+                    if (wantOutput('water__volume')) call me%nc__water__volume%setData(volume, start=[x, y, t])
+                    if (wantOutput('water__j_contaminant_foam')) call me%nc__water__j_contaminant_foam%setData(j_foam, start=[x, y, t])
+                    if (wantOutput('water__j_contaminant_atmosphere')) call me%nc__water__j_contaminant_atmosphere%setData(j_air, start=[x, y, t])
+                    if (wantOutput('water__depth')) call me%nc__water__depth%setData(cell%getWaterDepth(), start=[x, y, t])
+                    if (wantOutput('water__flow')) call me%nc__water__flow%setData(cell%get_Q_outflow() / C%timeStep, start=[x, y, t])
                 end if
             end if
         end associate
@@ -315,27 +315,27 @@ contains
                     me%output_agg_sediment__mass(    x, y, tInChunk) = cell%getBedSedimentMass()
 
                 else if (C%netCDFWriteMode == 'itr') then
-                    call me%nc__sediment__m_contaminant_total%setData([ &
+                    if (wantOutput('sediment__m_contaminant_total')) call me%nc__sediment__m_contaminant_total%setData([ &
                         sum(cont%c(:,:,PFAS_AQ)), &
                         sum(cont%c(:,:,PFAS_SOL)), &
                         sum(cont%c(:,:,PFAS_AQ)) ], start=[1, x, y, t])
 
-                    call me%nc__sediment__m_contaminant_buried%setData([ &
+                    if (wantOutput('sediment__m_contaminant_buried')) call me%nc__sediment__m_contaminant_buried%setData([ &
                         sum(cont_buried%c(:,:,PFAS_AQ)), &
                         sum(cont_buried%c(:,:,PFAS_SOL)), &
                         sum(cont_buried%c(:,:,PFAS_AQ)) ], start=[1, x, y, t])
 
-                    call me%nc__sediment__C_contaminant_total%setData([ &
+                    if (wantOutput('sediment__C_contaminant_total')) call me%nc__sediment__C_contaminant_total%setData([ &
                         sum(cont%c(:,:,PFAS_AQ))      / cell%getBedSedimentMass(), &
                         sum(cont%c(:,:,PFAS_SOL))  / cell%getBedSedimentMass(), &
                         sum(cont%c(:,:,PFAS_AQ)) / cell%getBedSedimentMass() ], start=[1, x, y, t])
 
                     ! write layers into FREE slot (form=1)
-                    call me%nc__sediment__C_contaminant_layers%setData( &
+                    if (wantOutput('sediment__C_contaminant_layers')) call me%nc__sediment__C_contaminant_layers%setData( &
                         C_cont_layers, start=[1, PFAS_AQ, x, y, t])
 
-                    call me%nc__sediment__bed_area%setData(cell%getBedSedimentArea(), start=[x, y, t])
-                    call me%nc__sediment__mass%setData(    cell%getBedSedimentMass(), start=[x, y, t])
+                    if (wantOutput('sediment__bed_area')) call me%nc__sediment__bed_area%setData(cell%getBedSedimentArea(), start=[x, y, t])
+                    if (wantOutput('sediment__mass')) call me%nc__sediment__mass%setData(    cell%getBedSedimentMass(), start=[x, y, t])
                 end if
             end if
         end associate
@@ -346,191 +346,191 @@ contains
         class(NetCDFAggregatedOutput) :: me
 
         ! Mass by contaminant form (AQ, SOL, SPM, AWI, FOAM, AIR)
-        me%nc__water__m_contaminant = me%nc%setVariable('water__m_contaminant', 'f64', &
+        if (wantOutput('water__m_contaminant')) me%nc__water__m_contaminant = me%nc%setVariable('water__m_contaminant', 'f64', &
             [me%contaminant_form_dim, me%x_dim, me%y_dim, me%t_dim])
-        call me%nc__water__m_contaminant%setAttribute('units', 'kg')
-        call me%nc__water__m_contaminant%setAttribute('long_name', &
+        if (wantOutput('water__m_contaminant')) call me%nc__water__m_contaminant%setAttribute('units', 'kg')
+        if (wantOutput('water__m_contaminant')) call me%nc__water__m_contaminant%setAttribute('long_name', &
             'PFAS mass in surface water by phase (AQ,SOL,SPM,AWI,FOAM,AIR)')
-        call me%nc__water__m_contaminant%setAttribute('grid_mapping', 'spatial_ref')
-        call me%nc__water__m_contaminant%setAttribute('_FillValue', nf90_fill_double)
+        if (wantOutput('water__m_contaminant')) call me%nc__water__m_contaminant%setAttribute('grid_mapping', 'spatial_ref')
+        if (wantOutput('water__m_contaminant')) call me%nc__water__m_contaminant%setAttribute('_FillValue', nf90_fill_double)
 
         ! Concentrations by form (total and – optionally – split)
-        me%nc__water__C_contaminant = me%nc%setVariable('water__C_contaminant', 'f64', &
+        if (wantOutput('water__C_contaminant')) me%nc__water__C_contaminant = me%nc%setVariable('water__C_contaminant', 'f64', &
             [me%contaminant_form_dim, me%x_dim, me%y_dim, me%t_dim])
-        call me%nc__water__C_contaminant%setAttribute('units', 'kg/m3')
-        call me%nc__water__C_contaminant%setAttribute('long_name', &
+        if (wantOutput('water__C_contaminant')) call me%nc__water__C_contaminant%setAttribute('units', 'kg/m3')
+        if (wantOutput('water__C_contaminant')) call me%nc__water__C_contaminant%setAttribute('long_name', &
             'Total concentration of contaminant in surface water')
-        call me%nc__water__C_contaminant%setAttribute('grid_mapping', 'spatial_ref')
-        call me%nc__water__C_contaminant%setAttribute('_FillValue', nf90_fill_double)
+        if (wantOutput('water__C_contaminant')) call me%nc__water__C_contaminant%setAttribute('grid_mapping', 'spatial_ref')
+        if (wantOutput('water__C_contaminant')) call me%nc__water__C_contaminant%setAttribute('_FillValue', nf90_fill_double)
 
         if (C%includeSoilStateBreakdown) then
-            me%nc__water__C_contaminant_free = me%nc%setVariable('water__C_contaminant_free', 'f64', &
+            if (wantOutput('water__C_contaminant_free')) me%nc__water__C_contaminant_free = me%nc%setVariable('water__C_contaminant_free', 'f64', &
                 [me%x_dim, me%y_dim, me%t_dim])
-            call me%nc__water__C_contaminant_free%setAttribute('units', 'kg/m3')
-            call me%nc__water__C_contaminant_free%setAttribute('long_name', &
+            if (wantOutput('water__C_contaminant_free')) call me%nc__water__C_contaminant_free%setAttribute('units', 'kg/m3')
+            if (wantOutput('water__C_contaminant_free')) call me%nc__water__C_contaminant_free%setAttribute('long_name', &
                 'Concentration of aqueous PFAS in surface water')
-            call me%nc__water__C_contaminant_free%setAttribute('grid_mapping', 'spatial_ref')
-            call me%nc__water__C_contaminant_free%setAttribute('_FillValue', nf90_fill_double)
+            if (wantOutput('water__C_contaminant_free')) call me%nc__water__C_contaminant_free%setAttribute('grid_mapping', 'spatial_ref')
+            if (wantOutput('water__C_contaminant_free')) call me%nc__water__C_contaminant_free%setAttribute('_FillValue', nf90_fill_double)
 
-            me%nc__water__C_contaminant_attached = me%nc%setVariable('water__C_contaminant_attached', 'f64', &
+            if (wantOutput('water__C_contaminant_attached')) me%nc__water__C_contaminant_attached = me%nc%setVariable('water__C_contaminant_attached', 'f64', &
                 [me%x_dim, me%y_dim, me%t_dim])
-            call me%nc__water__C_contaminant_attached%setAttribute('units', 'kg/m3')
-            call me%nc__water__C_contaminant_attached%setAttribute('long_name', &
+            if (wantOutput('water__C_contaminant_attached')) call me%nc__water__C_contaminant_attached%setAttribute('units', 'kg/m3')
+            if (wantOutput('water__C_contaminant_attached')) call me%nc__water__C_contaminant_attached%setAttribute('long_name', &
                 'Concentration of solid/sorbed PFAS in surface water')
-            call me%nc__water__C_contaminant_attached%setAttribute('grid_mapping', 'spatial_ref')
-            call me%nc__water__C_contaminant_attached%setAttribute('_FillValue', nf90_fill_double)
+            if (wantOutput('water__C_contaminant_attached')) call me%nc__water__C_contaminant_attached%setAttribute('grid_mapping', 'spatial_ref')
+            if (wantOutput('water__C_contaminant_attached')) call me%nc__water__C_contaminant_attached%setAttribute('_FillValue', nf90_fill_double)
         end if
 
         ! Contaminant fluxes by form
-        me%nc__water__j_contaminant_outflow = me%nc%setVariable('water__j_contaminant_outflow', 'f64', &
+        if (wantOutput('water__j_contaminant_outflow')) me%nc__water__j_contaminant_outflow = me%nc%setVariable('water__j_contaminant_outflow', 'f64', &
             [me%contaminant_form_dim, me%x_dim, me%y_dim, me%t_dim])
-        call me%nc__water__j_contaminant_outflow%setAttribute('units', 'kg')
-        call me%nc__water__j_contaminant_outflow%setAttribute('long_name', 'Mass of contaminant outflowing downstream')
-        call me%nc__water__j_contaminant_outflow%setAttribute('grid_mapping', 'spatial_ref')
-        call me%nc__water__j_contaminant_outflow%setAttribute('_FillValue', nf90_fill_double)
+        if (wantOutput('water__j_contaminant_outflow')) call me%nc__water__j_contaminant_outflow%setAttribute('units', 'kg')
+        if (wantOutput('water__j_contaminant_outflow')) call me%nc__water__j_contaminant_outflow%setAttribute('long_name', 'Mass of contaminant outflowing downstream')
+        if (wantOutput('water__j_contaminant_outflow')) call me%nc__water__j_contaminant_outflow%setAttribute('grid_mapping', 'spatial_ref')
+        if (wantOutput('water__j_contaminant_outflow')) call me%nc__water__j_contaminant_outflow%setAttribute('_FillValue', nf90_fill_double)
 
-        me%nc__water__j_contaminant_deposited = me%nc%setVariable('water__j_contaminant_deposited', 'f64', &
+        if (wantOutput('water__j_contaminant_deposited')) me%nc__water__j_contaminant_deposited = me%nc%setVariable('water__j_contaminant_deposited', 'f64', &
             [me%contaminant_form_dim, me%x_dim, me%y_dim, me%t_dim])
-        call me%nc__water__j_contaminant_deposited%setAttribute('units', 'kg')
-        call me%nc__water__j_contaminant_deposited%setAttribute('long_name', 'Mass of contaminant deposited to bed sediment')
-        call me%nc__water__j_contaminant_deposited%setAttribute('grid_mapping', 'spatial_ref')
-        call me%nc__water__j_contaminant_deposited%setAttribute('_FillValue', nf90_fill_double)
+        if (wantOutput('water__j_contaminant_deposited')) call me%nc__water__j_contaminant_deposited%setAttribute('units', 'kg')
+        if (wantOutput('water__j_contaminant_deposited')) call me%nc__water__j_contaminant_deposited%setAttribute('long_name', 'Mass of contaminant deposited to bed sediment')
+        if (wantOutput('water__j_contaminant_deposited')) call me%nc__water__j_contaminant_deposited%setAttribute('grid_mapping', 'spatial_ref')
+        if (wantOutput('water__j_contaminant_deposited')) call me%nc__water__j_contaminant_deposited%setAttribute('_FillValue', nf90_fill_double)
 
-        me%nc__water__j_contaminant_resuspended = me%nc%setVariable('water__j_contaminant_resuspended', 'f64', &
+        if (wantOutput('water__j_contaminant_resuspended')) me%nc__water__j_contaminant_resuspended = me%nc%setVariable('water__j_contaminant_resuspended', 'f64', &
             [me%contaminant_form_dim, me%x_dim, me%y_dim, me%t_dim])
-        call me%nc__water__j_contaminant_resuspended%setAttribute('units', 'kg')
-        call me%nc__water__j_contaminant_resuspended%setAttribute('long_name', 'Mass of contaminant resuspended from bed sediment')
-        call me%nc__water__j_contaminant_resuspended%setAttribute('grid_mapping', 'spatial_ref')
-        call me%nc__water__j_contaminant_resuspended%setAttribute('_FillValue', nf90_fill_double)
+        if (wantOutput('water__j_contaminant_resuspended')) call me%nc__water__j_contaminant_resuspended%setAttribute('units', 'kg')
+        if (wantOutput('water__j_contaminant_resuspended')) call me%nc__water__j_contaminant_resuspended%setAttribute('long_name', 'Mass of contaminant resuspended from bed sediment')
+        if (wantOutput('water__j_contaminant_resuspended')) call me%nc__water__j_contaminant_resuspended%setAttribute('grid_mapping', 'spatial_ref')
+        if (wantOutput('water__j_contaminant_resuspended')) call me%nc__water__j_contaminant_resuspended%setAttribute('_FillValue', nf90_fill_double)
 
         ! SPM state
-        me%nc__water__m_spm = me%nc%setVariable('water__m_spm', 'f64', [me%x_dim, me%y_dim, me%t_dim])
-        call me%nc__water__m_spm%setAttribute('units', 'kg')
-        call me%nc__water__m_spm%setAttribute('long_name', 'Mass of suspended particulate matter in surface water')
-        call me%nc__water__m_spm%setAttribute('grid_mapping', 'spatial_ref')
-        call me%nc__water__m_spm%setAttribute('_FillValue', nf90_fill_double)
+        if (wantOutput('water__m_spm')) me%nc__water__m_spm = me%nc%setVariable('water__m_spm', 'f64', [me%x_dim, me%y_dim, me%t_dim])
+        if (wantOutput('water__m_spm')) call me%nc__water__m_spm%setAttribute('units', 'kg')
+        if (wantOutput('water__m_spm')) call me%nc__water__m_spm%setAttribute('long_name', 'Mass of suspended particulate matter in surface water')
+        if (wantOutput('water__m_spm')) call me%nc__water__m_spm%setAttribute('grid_mapping', 'spatial_ref')
+        if (wantOutput('water__m_spm')) call me%nc__water__m_spm%setAttribute('_FillValue', nf90_fill_double)
 
-        me%nc__water__C_spm = me%nc%setVariable('water__C_spm', 'f64', [me%x_dim, me%y_dim, me%t_dim])
-        call me%nc__water__C_spm%setAttribute('units', 'kg/m3')
-        call me%nc__water__C_spm%setAttribute('long_name', 'Concentration of suspended particulate matter in surface water')
-        call me%nc__water__C_spm%setAttribute('grid_mapping', 'spatial_ref')
-        call me%nc__water__C_spm%setAttribute('_FillValue', nf90_fill_double)
+        if (wantOutput('water__C_spm')) me%nc__water__C_spm = me%nc%setVariable('water__C_spm', 'f64', [me%x_dim, me%y_dim, me%t_dim])
+        if (wantOutput('water__C_spm')) call me%nc__water__C_spm%setAttribute('units', 'kg/m3')
+        if (wantOutput('water__C_spm')) call me%nc__water__C_spm%setAttribute('long_name', 'Concentration of suspended particulate matter in surface water')
+        if (wantOutput('water__C_spm')) call me%nc__water__C_spm%setAttribute('grid_mapping', 'spatial_ref')
+        if (wantOutput('water__C_spm')) call me%nc__water__C_spm%setAttribute('_FillValue', nf90_fill_double)
 
         ! Optional SPM fluxes (use names that exist on NetCDFOutput: *_deposited*)
         if (C%includeSedimentFluxes) then
-            me%nc__water__m_spm_erosion = me%nc%setVariable('water__m_spm_erosion', 'f64', [me%x_dim, me%y_dim, me%t_dim])
-            call me%nc__water__m_spm_erosion%setAttribute('units', 'kg')
-            call me%nc__water__m_spm_erosion%setAttribute('long_name', 'Mass of SPM eroded from soil')
-            call me%nc__water__m_spm_erosion%setAttribute('grid_mapping', 'spatial_ref')
-            call me%nc__water__m_spm_erosion%setAttribute('_FillValue', nf90_fill_double)
+            if (wantOutput('water__m_spm_erosion')) me%nc__water__m_spm_erosion = me%nc%setVariable('water__m_spm_erosion', 'f64', [me%x_dim, me%y_dim, me%t_dim])
+            if (wantOutput('water__m_spm_erosion')) call me%nc__water__m_spm_erosion%setAttribute('units', 'kg')
+            if (wantOutput('water__m_spm_erosion')) call me%nc__water__m_spm_erosion%setAttribute('long_name', 'Mass of SPM eroded from soil')
+            if (wantOutput('water__m_spm_erosion')) call me%nc__water__m_spm_erosion%setAttribute('grid_mapping', 'spatial_ref')
+            if (wantOutput('water__m_spm_erosion')) call me%nc__water__m_spm_erosion%setAttribute('_FillValue', nf90_fill_double)
 
-            me%nc__water__m_spm_deposited = me%nc%setVariable('water__m_spm_deposited', 'f64', [me%x_dim, me%y_dim, me%t_dim])
-            call me%nc__water__m_spm_deposited%setAttribute('units', 'kg')
-            call me%nc__water__m_spm_deposited%setAttribute('long_name', 'Mass of SPM deposited to bed sediment')
-            call me%nc__water__m_spm_deposited%setAttribute('grid_mapping', 'spatial_ref')
-            call me%nc__water__m_spm_deposited%setAttribute('_FillValue', nf90_fill_double)
+            if (wantOutput('water__m_spm_deposited')) me%nc__water__m_spm_deposited = me%nc%setVariable('water__m_spm_deposited', 'f64', [me%x_dim, me%y_dim, me%t_dim])
+            if (wantOutput('water__m_spm_deposited')) call me%nc__water__m_spm_deposited%setAttribute('units', 'kg')
+            if (wantOutput('water__m_spm_deposited')) call me%nc__water__m_spm_deposited%setAttribute('long_name', 'Mass of SPM deposited to bed sediment')
+            if (wantOutput('water__m_spm_deposited')) call me%nc__water__m_spm_deposited%setAttribute('grid_mapping', 'spatial_ref')
+            if (wantOutput('water__m_spm_deposited')) call me%nc__water__m_spm_deposited%setAttribute('_FillValue', nf90_fill_double)
 
-            me%nc__water__m_spm_resuspended = me%nc%setVariable('water__m_spm_resuspended', 'f64', [me%x_dim, me%y_dim, me%t_dim])
-            call me%nc__water__m_spm_resuspended%setAttribute('units', 'kg')
-            call me%nc__water__m_spm_resuspended%setAttribute('long_name', 'Mass of SPM resuspended from bed sediment')
-            call me%nc__water__m_spm_resuspended%setAttribute('grid_mapping', 'spatial_ref')
-            call me%nc__water__m_spm_resuspended%setAttribute('_FillValue', nf90_fill_double)
+            if (wantOutput('water__m_spm_resuspended')) me%nc__water__m_spm_resuspended = me%nc%setVariable('water__m_spm_resuspended', 'f64', [me%x_dim, me%y_dim, me%t_dim])
+            if (wantOutput('water__m_spm_resuspended')) call me%nc__water__m_spm_resuspended%setAttribute('units', 'kg')
+            if (wantOutput('water__m_spm_resuspended')) call me%nc__water__m_spm_resuspended%setAttribute('long_name', 'Mass of SPM resuspended from bed sediment')
+            if (wantOutput('water__m_spm_resuspended')) call me%nc__water__m_spm_resuspended%setAttribute('grid_mapping', 'spatial_ref')
+            if (wantOutput('water__m_spm_resuspended')) call me%nc__water__m_spm_resuspended%setAttribute('_FillValue', nf90_fill_double)
 
-            me%nc__water__m_spm_inflow = me%nc%setVariable('water__m_spm_inflow', 'f64', [me%x_dim, me%y_dim, me%t_dim])
-            call me%nc__water__m_spm_inflow%setAttribute('units', 'kg')
-            call me%nc__water__m_spm_inflow%setAttribute('long_name', 'Mass of SPM inflowing from upstream')
-            call me%nc__water__m_spm_inflow%setAttribute('grid_mapping', 'spatial_ref')
-            call me%nc__water__m_spm_inflow%setAttribute('_FillValue', nf90_fill_double)
+            if (wantOutput('water__m_spm_inflow')) me%nc__water__m_spm_inflow = me%nc%setVariable('water__m_spm_inflow', 'f64', [me%x_dim, me%y_dim, me%t_dim])
+            if (wantOutput('water__m_spm_inflow')) call me%nc__water__m_spm_inflow%setAttribute('units', 'kg')
+            if (wantOutput('water__m_spm_inflow')) call me%nc__water__m_spm_inflow%setAttribute('long_name', 'Mass of SPM inflowing from upstream')
+            if (wantOutput('water__m_spm_inflow')) call me%nc__water__m_spm_inflow%setAttribute('grid_mapping', 'spatial_ref')
+            if (wantOutput('water__m_spm_inflow')) call me%nc__water__m_spm_inflow%setAttribute('_FillValue', nf90_fill_double)
 
-            me%nc__water__m_spm_outflow = me%nc%setVariable('water__m_spm_outflow', 'f64', [me%x_dim, me%y_dim, me%t_dim])
-            call me%nc__water__m_spm_outflow%setAttribute('units', 'kg')
-            call me%nc__water__m_spm_outflow%setAttribute('long_name', 'Mass of SPM outflowing downstream')
-            call me%nc__water__m_spm_outflow%setAttribute('grid_mapping', 'spatial_ref')
-            call me%nc__water__m_spm_outflow%setAttribute('_FillValue', nf90_fill_double)
+            if (wantOutput('water__m_spm_outflow')) me%nc__water__m_spm_outflow = me%nc%setVariable('water__m_spm_outflow', 'f64', [me%x_dim, me%y_dim, me%t_dim])
+            if (wantOutput('water__m_spm_outflow')) call me%nc__water__m_spm_outflow%setAttribute('units', 'kg')
+            if (wantOutput('water__m_spm_outflow')) call me%nc__water__m_spm_outflow%setAttribute('long_name', 'Mass of SPM outflowing downstream')
+            if (wantOutput('water__m_spm_outflow')) call me%nc__water__m_spm_outflow%setAttribute('grid_mapping', 'spatial_ref')
+            if (wantOutput('water__m_spm_outflow')) call me%nc__water__m_spm_outflow%setAttribute('_FillValue', nf90_fill_double)
 
-            me%nc__water__m_spm_bank_erosion = me%nc%setVariable('water__m_spm_bank_erosion', 'f64', [me%x_dim, me%y_dim, me%t_dim])
-            call me%nc__water__m_spm_bank_erosion%setAttribute('units', 'kg')
-            call me%nc__water__m_spm_bank_erosion%setAttribute('long_name', 'Mass of SPM eroded from river banks')
-            call me%nc__water__m_spm_bank_erosion%setAttribute('grid_mapping', 'spatial_ref')
-            call me%nc__water__m_spm_bank_erosion%setAttribute('_FillValue', nf90_fill_double)
+            if (wantOutput('water__m_spm_bank_erosion')) me%nc__water__m_spm_bank_erosion = me%nc%setVariable('water__m_spm_bank_erosion', 'f64', [me%x_dim, me%y_dim, me%t_dim])
+            if (wantOutput('water__m_spm_bank_erosion')) call me%nc__water__m_spm_bank_erosion%setAttribute('units', 'kg')
+            if (wantOutput('water__m_spm_bank_erosion')) call me%nc__water__m_spm_bank_erosion%setAttribute('long_name', 'Mass of SPM eroded from river banks')
+            if (wantOutput('water__m_spm_bank_erosion')) call me%nc__water__m_spm_bank_erosion%setAttribute('grid_mapping', 'spatial_ref')
+            if (wantOutput('water__m_spm_bank_erosion')) call me%nc__water__m_spm_bank_erosion%setAttribute('_FillValue', nf90_fill_double)
         end if
 
         ! Water volume/depth/flow
-        me%nc__water__volume = me%nc%setVariable('water__volume', 'f64', [me%x_dim, me%y_dim, me%t_dim])
-        call me%nc__water__volume%setAttribute('units', 'm3')
-        call me%nc__water__volume%setAttribute('long_name', 'Volume of water')
-        call me%nc__water__volume%setAttribute('grid_mapping', 'spatial_ref')
-        call me%nc__water__volume%setAttribute('_FillValue', nf90_fill_double)
-        me%nc__water__j_contaminant_foam = me%nc%setVariable('water__j_contaminant_foam', 'f64', &
+        if (wantOutput('water__volume')) me%nc__water__volume = me%nc%setVariable('water__volume', 'f64', [me%x_dim, me%y_dim, me%t_dim])
+        if (wantOutput('water__volume')) call me%nc__water__volume%setAttribute('units', 'm3')
+        if (wantOutput('water__volume')) call me%nc__water__volume%setAttribute('long_name', 'Volume of water')
+        if (wantOutput('water__volume')) call me%nc__water__volume%setAttribute('grid_mapping', 'spatial_ref')
+        if (wantOutput('water__volume')) call me%nc__water__volume%setAttribute('_FillValue', nf90_fill_double)
+        if (wantOutput('water__j_contaminant_foam')) me%nc__water__j_contaminant_foam = me%nc%setVariable('water__j_contaminant_foam', 'f64', &
             [me%x_dim, me%y_dim, me%t_dim])
-        call me%nc__water__j_contaminant_foam%setAttribute('units', 'kg/timestep')
-        call me%nc__water__j_contaminant_foam%setAttribute('long_name', &
+        if (wantOutput('water__j_contaminant_foam')) call me%nc__water__j_contaminant_foam%setAttribute('units', 'kg/timestep')
+        if (wantOutput('water__j_contaminant_foam')) call me%nc__water__j_contaminant_foam%setAttribute('long_name', &
             'PFAS exported from the water surface (air-water interface) to foam; negative = loss')
-        call me%nc__water__j_contaminant_foam%setAttribute('grid_mapping', 'spatial_ref')
-        call me%nc__water__j_contaminant_foam%setAttribute('_FillValue', nf90_fill_double)
-        me%nc__water__j_contaminant_atmosphere = me%nc%setVariable('water__j_contaminant_atmosphere', 'f64', &
+        if (wantOutput('water__j_contaminant_foam')) call me%nc__water__j_contaminant_foam%setAttribute('grid_mapping', 'spatial_ref')
+        if (wantOutput('water__j_contaminant_foam')) call me%nc__water__j_contaminant_foam%setAttribute('_FillValue', nf90_fill_double)
+        if (wantOutput('water__j_contaminant_atmosphere')) me%nc__water__j_contaminant_atmosphere = me%nc%setVariable('water__j_contaminant_atmosphere', 'f64', &
             [me%x_dim, me%y_dim, me%t_dim])
-        call me%nc__water__j_contaminant_atmosphere%setAttribute('units', 'kg/timestep')
-        call me%nc__water__j_contaminant_atmosphere%setAttribute('long_name', &
+        if (wantOutput('water__j_contaminant_atmosphere')) call me%nc__water__j_contaminant_atmosphere%setAttribute('units', 'kg/timestep')
+        if (wantOutput('water__j_contaminant_atmosphere')) call me%nc__water__j_contaminant_atmosphere%setAttribute('long_name', &
             'PFAS lost to the atmosphere by volatilisation and sea-spray aerosol; negative = loss')
-        call me%nc__water__j_contaminant_atmosphere%setAttribute('grid_mapping', 'spatial_ref')
-        call me%nc__water__j_contaminant_atmosphere%setAttribute('_FillValue', nf90_fill_double)
+        if (wantOutput('water__j_contaminant_atmosphere')) call me%nc__water__j_contaminant_atmosphere%setAttribute('grid_mapping', 'spatial_ref')
+        if (wantOutput('water__j_contaminant_atmosphere')) call me%nc__water__j_contaminant_atmosphere%setAttribute('_FillValue', nf90_fill_double)
 
-        me%nc__water__depth = me%nc%setVariable('water__depth', 'f64', [me%x_dim, me%y_dim, me%t_dim])
-        call me%nc__water__depth%setAttribute('units', 'm')
-        call me%nc__water__depth%setAttribute('standard_name', 'depth')
-        call me%nc__water__depth%setAttribute('long_name', 'Depth of water')
-        call me%nc__water__depth%setAttribute('grid_mapping', 'spatial_ref')
-        call me%nc__water__depth%setAttribute('_FillValue', nf90_fill_double)
+        if (wantOutput('water__depth')) me%nc__water__depth = me%nc%setVariable('water__depth', 'f64', [me%x_dim, me%y_dim, me%t_dim])
+        if (wantOutput('water__depth')) call me%nc__water__depth%setAttribute('units', 'm')
+        if (wantOutput('water__depth')) call me%nc__water__depth%setAttribute('standard_name', 'depth')
+        if (wantOutput('water__depth')) call me%nc__water__depth%setAttribute('long_name', 'Depth of water')
+        if (wantOutput('water__depth')) call me%nc__water__depth%setAttribute('grid_mapping', 'spatial_ref')
+        if (wantOutput('water__depth')) call me%nc__water__depth%setAttribute('_FillValue', nf90_fill_double)
 
-        me%nc__water__flow = me%nc%setVariable('water__flow', 'f64', [me%x_dim, me%y_dim, me%t_dim])
-        call me%nc__water__flow%setAttribute('units', 'm3/s')
-        call me%nc__water__flow%setAttribute('long_name', 'Discharge out of the cell')
-        call me%nc__water__flow%setAttribute('grid_mapping', 'spatial_ref')
-        call me%nc__water__flow%setAttribute('_FillValue', nf90_fill_double)
+        if (wantOutput('water__flow')) me%nc__water__flow = me%nc%setVariable('water__flow', 'f64', [me%x_dim, me%y_dim, me%t_dim])
+        if (wantOutput('water__flow')) call me%nc__water__flow%setAttribute('units', 'm3/s')
+        if (wantOutput('water__flow')) call me%nc__water__flow%setAttribute('long_name', 'Discharge out of the cell')
+        if (wantOutput('water__flow')) call me%nc__water__flow%setAttribute('grid_mapping', 'spatial_ref')
+        if (wantOutput('water__flow')) call me%nc__water__flow%setAttribute('_FillValue', nf90_fill_double)
     end subroutine
 
     !> Create the variables for bed sediments
     subroutine initSedimentNetCDFAggregatedOutput(me)
         class(NetCDFAggregatedOutput) :: me
-        me%nc__sediment__m_contaminant_total = me%nc%setVariable('sediment__m_contaminant_total', 'f64', &
+        if (wantOutput('sediment__m_contaminant_total')) me%nc__sediment__m_contaminant_total = me%nc%setVariable('sediment__m_contaminant_total', 'f64', &
             [me%contaminant_form_dim, me%x_dim, me%y_dim, me%t_dim])
-        call me%nc__sediment__m_contaminant_total%setAttribute('units', 'kg')
-        call me%nc__sediment__m_contaminant_total%setAttribute('long_name', &
+        if (wantOutput('sediment__m_contaminant_total')) call me%nc__sediment__m_contaminant_total%setAttribute('units', 'kg')
+        if (wantOutput('sediment__m_contaminant_total')) call me%nc__sediment__m_contaminant_total%setAttribute('long_name', &
             'PFAS mass in sediment by phase (AQ,SOL,SPM,AWI,FOAM,AIR)')
-        call me%nc__sediment__m_contaminant_total%setAttribute('grid_mapping', 'spatial_ref')
-        call me%nc__sediment__m_contaminant_total%setAttribute('_FillValue', nf90_fill_double)
-        me%nc__sediment__C_contaminant_total = me%nc%setVariable('sediment__C_contaminant_total', 'f64', &
+        if (wantOutput('sediment__m_contaminant_total')) call me%nc__sediment__m_contaminant_total%setAttribute('grid_mapping', 'spatial_ref')
+        if (wantOutput('sediment__m_contaminant_total')) call me%nc__sediment__m_contaminant_total%setAttribute('_FillValue', nf90_fill_double)
+        if (wantOutput('sediment__C_contaminant_total')) me%nc__sediment__C_contaminant_total = me%nc%setVariable('sediment__C_contaminant_total', 'f64', &
             [me%contaminant_form_dim, me%x_dim, me%y_dim, me%t_dim])
-        call me%nc__sediment__C_contaminant_total%setAttribute('units', 'kg/m3')
-        call me%nc__sediment__C_contaminant_total%setAttribute('long_name', &
+        if (wantOutput('sediment__C_contaminant_total')) call me%nc__sediment__C_contaminant_total%setAttribute('units', 'kg/m3')
+        if (wantOutput('sediment__C_contaminant_total')) call me%nc__sediment__C_contaminant_total%setAttribute('long_name', &
             'Concentration of contaminant across all sediment layers')
-        call me%nc__sediment__C_contaminant_total%setAttribute('grid_mapping', 'spatial_ref')
-        call me%nc__sediment__C_contaminant_total%setAttribute('_FillValue', nf90_fill_double)
-        me%nc__sediment__C_contaminant_layers = me%nc%setVariable('sediment__C_contaminant_layers', 'f64', &
+        if (wantOutput('sediment__C_contaminant_total')) call me%nc__sediment__C_contaminant_total%setAttribute('grid_mapping', 'spatial_ref')
+        if (wantOutput('sediment__C_contaminant_total')) call me%nc__sediment__C_contaminant_total%setAttribute('_FillValue', nf90_fill_double)
+        if (wantOutput('sediment__C_contaminant_layers')) me%nc__sediment__C_contaminant_layers = me%nc%setVariable('sediment__C_contaminant_layers', 'f64', &
             [me%sed_l_dim, me%contaminant_form_dim, me%x_dim, me%y_dim, me%t_dim])
-        call me%nc__sediment__C_contaminant_layers%setAttribute('units', 'kg/m3')
-        call me%nc__sediment__C_contaminant_layers%setAttribute('long_name', &
+        if (wantOutput('sediment__C_contaminant_layers')) call me%nc__sediment__C_contaminant_layers%setAttribute('units', 'kg/m3')
+        if (wantOutput('sediment__C_contaminant_layers')) call me%nc__sediment__C_contaminant_layers%setAttribute('long_name', &
             'Concentration of contaminant by sediment layer')
-        call me%nc__sediment__C_contaminant_layers%setAttribute('grid_mapping', 'spatial_ref')
-        call me%nc__sediment__C_contaminant_layers%setAttribute('_FillValue', nf90_fill_double)
-        me%nc__sediment__m_contaminant_buried = me%nc%setVariable('sediment__m_contaminant_buried', 'f64', &
+        if (wantOutput('sediment__C_contaminant_layers')) call me%nc__sediment__C_contaminant_layers%setAttribute('grid_mapping', 'spatial_ref')
+        if (wantOutput('sediment__C_contaminant_layers')) call me%nc__sediment__C_contaminant_layers%setAttribute('_FillValue', nf90_fill_double)
+        if (wantOutput('sediment__m_contaminant_buried')) me%nc__sediment__m_contaminant_buried = me%nc%setVariable('sediment__m_contaminant_buried', 'f64', &
             [me%contaminant_form_dim, me%x_dim, me%y_dim, me%t_dim])
-        call me%nc__sediment__m_contaminant_buried%setAttribute('units', 'kg')
-        call me%nc__sediment__m_contaminant_buried%setAttribute('long_name', &
+        if (wantOutput('sediment__m_contaminant_buried')) call me%nc__sediment__m_contaminant_buried%setAttribute('units', 'kg')
+        if (wantOutput('sediment__m_contaminant_buried')) call me%nc__sediment__m_contaminant_buried%setAttribute('long_name', &
             'Mass of contaminant buried from sediment')
-        call me%nc__sediment__m_contaminant_buried%setAttribute('grid_mapping', 'spatial_ref')
-        call me%nc__sediment__m_contaminant_buried%setAttribute('_FillValue', nf90_fill_double)
-        me%nc__sediment__bed_area = me%nc%setVariable('sediment__bed_area', 'f64', [me%x_dim, me%y_dim, me%t_dim])
-        call me%nc__sediment__bed_area%setAttribute('units', 'm2')
-        call me%nc__sediment__bed_area%setAttribute('long_name', 'Surface area of bed sediment')
-        call me%nc__sediment__bed_area%setAttribute('grid_mapping', 'spatial_ref')
-        call me%nc__sediment__bed_area%setAttribute('_FillValue', nf90_fill_double)
-        me%nc__sediment__mass = me%nc%setVariable('sediment__mass', 'f64', [me%x_dim, me%y_dim, me%t_dim])
-        call me%nc__sediment__mass%setAttribute('units', 'kg')
-        call me%nc__sediment__mass%setAttribute('long_name', 'Mass of fine sediment in bed sediment')
-        call me%nc__sediment__mass%setAttribute('grid_mapping', 'spatial_ref')
-        call me%nc__sediment__mass%setAttribute('_FillValue', nf90_fill_double)
+        if (wantOutput('sediment__m_contaminant_buried')) call me%nc__sediment__m_contaminant_buried%setAttribute('grid_mapping', 'spatial_ref')
+        if (wantOutput('sediment__m_contaminant_buried')) call me%nc__sediment__m_contaminant_buried%setAttribute('_FillValue', nf90_fill_double)
+        if (wantOutput('sediment__bed_area')) me%nc__sediment__bed_area = me%nc%setVariable('sediment__bed_area', 'f64', [me%x_dim, me%y_dim, me%t_dim])
+        if (wantOutput('sediment__bed_area')) call me%nc__sediment__bed_area%setAttribute('units', 'm2')
+        if (wantOutput('sediment__bed_area')) call me%nc__sediment__bed_area%setAttribute('long_name', 'Surface area of bed sediment')
+        if (wantOutput('sediment__bed_area')) call me%nc__sediment__bed_area%setAttribute('grid_mapping', 'spatial_ref')
+        if (wantOutput('sediment__bed_area')) call me%nc__sediment__bed_area%setAttribute('_FillValue', nf90_fill_double)
+        if (wantOutput('sediment__mass')) me%nc__sediment__mass = me%nc%setVariable('sediment__mass', 'f64', [me%x_dim, me%y_dim, me%t_dim])
+        if (wantOutput('sediment__mass')) call me%nc__sediment__mass%setAttribute('units', 'kg')
+        if (wantOutput('sediment__mass')) call me%nc__sediment__mass%setAttribute('long_name', 'Mass of fine sediment in bed sediment')
+        if (wantOutput('sediment__mass')) call me%nc__sediment__mass%setAttribute('grid_mapping', 'spatial_ref')
+        if (wantOutput('sediment__mass')) call me%nc__sediment__mass%setAttribute('_FillValue', nf90_fill_double)
     end subroutine
 
     !> Create the dimensions in the NetCDF file (aggregated: no waterbody dim)
@@ -665,80 +665,80 @@ contains
         class(NetCDFAggregatedOutput) :: me
         integer :: tStart
 
-        call me%nc__water__m_contaminant%setData(      me%output_agg_water__m_contaminant,        &
+        if (wantOutput('water__m_contaminant')) call me%nc__water__m_contaminant%setData(      me%output_agg_water__m_contaminant,        &
                                                     start=[1,1,1,tStart])
-        call me%nc__water__C_contaminant%setData(      me%output_agg_water__C_contaminant,        &
+        if (wantOutput('water__C_contaminant')) call me%nc__water__C_contaminant%setData(      me%output_agg_water__C_contaminant,        &
                                                     start=[1,1,1,tStart])
         if (C%includeSoilStateBreakdown) then
-            call me%nc__water__C_contaminant_free%setData(    me%output_agg_water__C_contaminant_free,    &
+            if (wantOutput('water__C_contaminant_free')) call me%nc__water__C_contaminant_free%setData(    me%output_agg_water__C_contaminant_free,    &
                                                             start=[1,1,tStart])
-            call me%nc__water__C_contaminant_attached%setData(me%output_agg_water__C_contaminant_attached, &
+            if (wantOutput('water__C_contaminant_attached')) call me%nc__water__C_contaminant_attached%setData(me%output_agg_water__C_contaminant_attached, &
                                                             start=[1,1,tStart])
         end if
-        call me%nc__water__j_contaminant_outflow%setData(    me%output_agg_water__j_contaminant_outflow,   &
+        if (wantOutput('water__j_contaminant_outflow')) call me%nc__water__j_contaminant_outflow%setData(    me%output_agg_water__j_contaminant_outflow,   &
                                                             start=[1,1,1,tStart])
-        call me%nc__water__j_contaminant_deposited%setData(  me%output_agg_water__j_contaminant_deposited, &
+        if (wantOutput('water__j_contaminant_deposited')) call me%nc__water__j_contaminant_deposited%setData(  me%output_agg_water__j_contaminant_deposited, &
                                                             start=[1,1,1,tStart])
-        call me%nc__water__j_contaminant_resuspended%setData(me%output_agg_water__j_contaminant_resuspended,&
+        if (wantOutput('water__j_contaminant_resuspended')) call me%nc__water__j_contaminant_resuspended%setData(me%output_agg_water__j_contaminant_resuspended,&
                                                             start=[1,1,1,tStart])
-        call me%nc__water__m_spm%setData(                   me%output_agg_water__m_spm,                   &
+        if (wantOutput('water__m_spm')) call me%nc__water__m_spm%setData(                   me%output_agg_water__m_spm,                   &
                                                             start=[1,1,tStart])
-        call me%nc__water__C_spm%setData(                   me%output_agg_water__C_spm,                   &
+        if (wantOutput('water__C_spm')) call me%nc__water__C_spm%setData(                   me%output_agg_water__C_spm,                   &
                                                             start=[1,1,tStart])
         if (C%includeSedimentFluxes) then
-            call me%nc__water__m_spm_erosion%setData(       me%output_agg_water__m_spm_erosion,           &
+            if (wantOutput('water__m_spm_erosion')) call me%nc__water__m_spm_erosion%setData(       me%output_agg_water__m_spm_erosion,           &
                                                             start=[1,1,tStart])
-            call me%nc__water__m_spm_deposited%setData(     me%output_agg_water__m_spm_deposition,        &
+            if (wantOutput('water__m_spm_deposited')) call me%nc__water__m_spm_deposited%setData(     me%output_agg_water__m_spm_deposition,        &
                                                             start=[1,1,tStart])
-            call me%nc__water__m_spm_resuspended%setData(   me%output_agg_water__m_spm_resuspended,       &
+            if (wantOutput('water__m_spm_resuspended')) call me%nc__water__m_spm_resuspended%setData(   me%output_agg_water__m_spm_resuspended,       &
                                                             start=[1,1,tStart])
-            call me%nc__water__m_spm_inflow%setData(        me%output_agg_water__m_spm_inflow,            &
+            if (wantOutput('water__m_spm_inflow')) call me%nc__water__m_spm_inflow%setData(        me%output_agg_water__m_spm_inflow,            &
                                                             start=[1,1,tStart])
-            call me%nc__water__m_spm_outflow%setData(       me%output_agg_water__m_spm_outflow,           &
+            if (wantOutput('water__m_spm_outflow')) call me%nc__water__m_spm_outflow%setData(       me%output_agg_water__m_spm_outflow,           &
                                                             start=[1,1,tStart])
-            call me%nc__water__m_spm_bank_erosion%setData(  me%output_agg_water__m_spm_bank_erosion,      &
+            if (wantOutput('water__m_spm_bank_erosion')) call me%nc__water__m_spm_bank_erosion%setData(  me%output_agg_water__m_spm_bank_erosion,      &
                                                             start=[1,1,tStart])
         end if
-        call me%nc__water__volume%setData(                  me%output_agg_water__volume,                  &
+        if (wantOutput('water__volume')) call me%nc__water__volume%setData(                  me%output_agg_water__volume,                  &
                                                             start=[1,1,tStart])
-        call me%nc__water__j_contaminant_foam%setData(me%output_agg_water__j_contaminant_foam, start=[1,1,tStart])
-        call me%nc__water__j_contaminant_atmosphere%setData(me%output_agg_water__j_contaminant_atmosphere, &
+        if (wantOutput('water__j_contaminant_foam')) call me%nc__water__j_contaminant_foam%setData(me%output_agg_water__j_contaminant_foam, start=[1,1,tStart])
+        if (wantOutput('water__j_contaminant_atmosphere')) call me%nc__water__j_contaminant_atmosphere%setData(me%output_agg_water__j_contaminant_atmosphere, &
             start=[1,1,tStart])
-        call me%nc__water__depth%setData(                   me%output_agg_water__depth,                   &
+        if (wantOutput('water__depth')) call me%nc__water__depth%setData(                   me%output_agg_water__depth,                   &
                                                             start=[1,1,tStart])
-        call me%nc__water__flow%setData(                    me%output_agg_water__flow,                    &
+        if (wantOutput('water__flow')) call me%nc__water__flow%setData(                    me%output_agg_water__flow,                    &
                                                             start=[1,1,tStart])
 
-        call me%nc__sediment__m_contaminant_total%setData(  me%output_agg_sediment__m_contaminant_total,  &
+        if (wantOutput('sediment__m_contaminant_total')) call me%nc__sediment__m_contaminant_total%setData(  me%output_agg_sediment__m_contaminant_total,  &
                                                             start=[1,1,1,tStart])
-        call me%nc__sediment__C_contaminant_total%setData(  me%output_agg_sediment__C_contaminant_total,  &
+        if (wantOutput('sediment__C_contaminant_total')) call me%nc__sediment__C_contaminant_total%setData(  me%output_agg_sediment__C_contaminant_total,  &
                                                             start=[1,1,1,tStart])
-        call me%nc__sediment__C_contaminant_layers%setData( me%output_agg_sediment__C_contaminant_layers, &
+        if (wantOutput('sediment__C_contaminant_layers')) call me%nc__sediment__C_contaminant_layers%setData( me%output_agg_sediment__C_contaminant_layers, &
                                                             start=[1,1,1,1,tStart])
-        call me%nc__sediment__m_contaminant_buried%setData( me%output_agg_sediment__m_contaminant_buried, &
+        if (wantOutput('sediment__m_contaminant_buried')) call me%nc__sediment__m_contaminant_buried%setData( me%output_agg_sediment__m_contaminant_buried, &
                                                             start=[1,1,1,tStart])
-        call me%nc__sediment__bed_area%setData(             me%output_agg_sediment__bed_area,             &
+        if (wantOutput('sediment__bed_area')) call me%nc__sediment__bed_area%setData(             me%output_agg_sediment__bed_area,             &
                                                             start=[1,1,tStart])
-        call me%nc__sediment__mass%setData(                 me%output_agg_sediment__mass,                 &
+        if (wantOutput('sediment__mass')) call me%nc__sediment__mass%setData(                 me%output_agg_sediment__mass,                 &
                                                             start=[1,1,tStart])
 
         ! Parent soil variables (grid-cell level)
-        call me%nc__soil__m_contaminant_total%setData( me%output_soil__m_contaminant_total, &
+        if (wantOutput('soil__m_contaminant_total')) call me%nc__soil__m_contaminant_total%setData( me%output_soil__m_contaminant_total, &
                                                     start=[1,1,1,tStart])
-        call me%nc__soil__C_contaminant_total%setData( me%output_soil__C_contaminant_total, &
+        if (wantOutput('soil__C_contaminant_total')) call me%nc__soil__C_contaminant_total%setData( me%output_soil__C_contaminant_total, &
                                                     start=[1,1,tStart])
 
         if (allocated(me%output_soil__C_contaminant_layers)) then
-            call me%nc__soil__C_contaminant_layers%setData( me%output_soil__C_contaminant_layers, &
+            if (wantOutput('soil__C_contaminant_layers')) call me%nc__soil__C_contaminant_layers%setData( me%output_soil__C_contaminant_layers, &
                                                             start=[1,1,1,tStart])
         end if
         if (allocated(me%output_soil__m_soil_eroded)) then
-            call me%nc__soil__m_soil_eroded%setData(       me%output_soil__m_soil_eroded,       &
+            if (wantOutput('soil__m_soil_eroded')) call me%nc__soil__m_soil_eroded%setData(       me%output_soil__m_soil_eroded,       &
                                                         start=[1,1,tStart])
-            call me%nc__soil__m_contaminant_eroded%setData(me%output_soil__m_contaminant_eroded, &
+            if (wantOutput('soil__m_contaminant_eroded')) call me%nc__soil__m_contaminant_eroded%setData(me%output_soil__m_contaminant_eroded, &
                                                         start=[1,1,1,tStart])
         end if
-        call me%nc__soil__m_contaminant_buried%setData(    me%output_soil__m_contaminant_buried, &
+        if (wantOutput('soil__m_contaminant_buried')) call me%nc__soil__m_contaminant_buried%setData(    me%output_soil__m_contaminant_buried, &
                                                         start=[1,1,1,tStart])
 
         ! Optional static grid vars

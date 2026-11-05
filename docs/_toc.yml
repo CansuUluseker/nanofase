@@ -28,6 +28,7 @@ parts:
     chapters:
     - file: theory/intro
     - file: theory/conceptual-structure
+    - file: theory/hydrology
   - caption: Developers
     chapters:
     - file: developers/conventions

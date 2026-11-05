@@ -13,6 +13,7 @@ module CheckpointModule
     use WaterBodyModule
     use SoilProfileModule
     use BedSedimentModule
+    use GridCellModule, only: GridCell
     implicit none
     private
 
@@ -58,6 +59,9 @@ contains
         real(dp), allocatable :: sedimentLayer_V_w(:,:,:,:,:)
         real(dp), allocatable :: sedimentLayer_f_comp(:,:,:,:,:,:)
         real(dp), allocatable :: sedimentLayer_pd_comp(:,:,:,:,:,:)
+        real(dp), allocatable :: gridCell_gwStorage(:,:)
+        real(dp), allocatable :: waterBody_routing(:,:,:,:)
+        real(dp), allocatable :: waterBody_m_spm(:,:,:,:)
         character(len=256) :: tr
         tr = "Checkpoint%saveCheckpoint"
 
@@ -165,6 +169,12 @@ contains
             end do
         end do
 
+        ! State added with the groundwater store and channel routing (an extra record at
+        ! the end, so that older checkpoint files can still be read): groundwater storage
+        ! per cell, routing state (inflow and outflow rates, channel storage) and SPM
+        ! mass per water body
+        call collectExtraState(me, t, gridCell_gwStorage, waterBody_routing, waterBody_m_spm)
+
         open(iouCheckpoint, file=trim(me%checkpointFile), form='unformatted', status='replace')
         write(iouCheckpoint) DATASET%gridBounds, DATASET%gridRes
         write(iouCheckpoint) t
@@ -174,6 +184,7 @@ contains
                              waterBody_Q, waterBody_Q_final, waterBody_j_spm, waterBody_j_spm_final
         write(iouCheckpoint) bedSediment_contaminant, bedSediment_m_dissolved, sedimentLayer_M_f, &
                              sedimentLayer_M_f_backup, sedimentLayer_V_w, sedimentLayer_f_comp, sedimentLayer_pd_comp
+        write(iouCheckpoint) gridCell_gwStorage, waterBody_routing, waterBody_m_spm
         close(iouCheckpoint)
 
         call LOGR%toConsole('Saving checkpoint to '//trim(me%checkpointFile)//': '//COLOR_GREEN//'success'//COLOR_RESET)
@@ -206,6 +217,10 @@ contains
         real(dp), allocatable :: sedimentLayer_f_comp(:,:,:,:,:,:)
         real(dp), allocatable :: sedimentLayer_pd_comp(:,:,:,:,:,:)
         integer :: t
+        real(dp), allocatable :: gridCell_gwStorage(:,:)
+        real(dp), allocatable :: waterBody_routing(:,:,:,:)
+        real(dp), allocatable :: waterBody_m_spm(:,:,:,:)
+        logical :: hasExtraState
         character(len=256) :: tr
         tr = "Checkpoint%reinstateCheckpoint"
 
@@ -266,6 +281,17 @@ contains
         read(iouCheckpoint, iostat=ioStat) bedSediment_contaminant, bedSediment_m_dissolved, sedimentLayer_M_f, &
                                            sedimentLayer_M_f_backup, sedimentLayer_V_w, sedimentLayer_f_comp, sedimentLayer_pd_comp
         if (ioStat /= 0) call ERROR_HANDLER%trigger(error=ErrorInstance(message="Error reading bed sediment data", trace=[tr]))
+        ! Groundwater store, routing and SPM state (absent from older checkpoint files)
+        allocate(gridCell_gwStorage(DATASET%gridShape(1), DATASET%gridShape(2)), &
+                 waterBody_routing(3, max(1, maxval(DATASET%nWaterbodies)), DATASET%gridShape(1), DATASET%gridShape(2)), &
+                 waterBody_m_spm(C%nSizeClassesSpm, max(1, maxval(DATASET%nWaterbodies)), DATASET%gridShape(1), &
+                                 DATASET%gridShape(2)))
+        read(iouCheckpoint, iostat=ioStat) gridCell_gwStorage, waterBody_routing, waterBody_m_spm
+        hasExtraState = (ioStat == 0)
+        if (.not. hasExtraState) then
+            call LOGR%add("Checkpoint: WARNING - no groundwater store, routing or SPM state in " // &
+                trim(me%checkpointFile) // " (older format); these start from their initial state")
+        end if
         close(iouCheckpoint)
 
         do j = 1, DATASET%gridShape(2)
@@ -302,11 +328,16 @@ contains
                                 do l = 1, C%nSedimentLayers
                                     associate (layer => sediment%colBedSedimentLayers(l)%item)
                                         do m = 1, C%nSizeClassesSpm
-                                            call layer%colFineSediment(m)%set(Mf_in=sedimentLayer_M_f(i,j,k,l,m), &
-                                                                              Vw_in=sedimentLayer_V_w(i,j,k,l,m))
-                                            call layer%colFineSediment(m)%backup_M_f()
+                                            ! Composition first: set() derives the sediment volume from it
                                             layer%colFineSediment(m)%f_comp = sedimentLayer_f_comp(i,j,k,l,m,:)
                                             layer%colFineSediment(m)%pd_comp = sedimentLayer_pd_comp(i,j,k,l,m,:)
+                                            ! The saved backup mass (there's no direct setter: set the mass
+                                            ! to it, take the backup, then set the actual mass)
+                                            call layer%colFineSediment(m)%set(Mf_in=sedimentLayer_M_f_backup(i,j,k,l,m), &
+                                                                              Vw_in=sedimentLayer_V_w(i,j,k,l,m))
+                                            call layer%colFineSediment(m)%backup_M_f()
+                                            call layer%colFineSediment(m)%set(Mf_in=sedimentLayer_M_f(i,j,k,l,m), &
+                                                                              Vw_in=sedimentLayer_V_w(i,j,k,l,m))
                                         end do
                                     end associate
                                 end do
@@ -317,6 +348,7 @@ contains
             end do
         end do
 
+        if (hasExtraState) call reinstateExtraState(me, gridCell_gwStorage, waterBody_routing, waterBody_m_spm)
         if (present(preserve_timestep) .and. preserve_timestep) then
             C%t0 = t
         end if
@@ -324,4 +356,62 @@ contains
         call LOGR%toConsole('Reinstating checkpoint from '//trim(me%checkpointFile)//': '//COLOR_GREEN//'success'//COLOR_RESET)
         call LOGR%toFile('Reinstating checkpoint from '//trim(me%checkpointFile)//': success')
     end subroutine
+    !> Gather the groundwater store, routing and water-column SPM state. At t = 0 (a
+    !! checkpoint saved after the warm up period) the groundwater storage is that at the end
+    !! of the warm up; otherwise it is the current (end of run) storage.
+    subroutine collectExtraState(me, t, gw, routing, m_spm)
+        class(Checkpoint) :: me
+        integer, intent(in) :: t
+        real(dp), allocatable, intent(out) :: gw(:,:), routing(:,:,:,:), m_spm(:,:,:,:)
+        integer :: i, j, k, nwb
+        nwb = max(1, maxval(DATASET%nWaterbodies))
+        allocate(gw(DATASET%gridShape(1), DATASET%gridShape(2)), routing(3, nwb, DATASET%gridShape(1), &
+                 DATASET%gridShape(2)), m_spm(C%nSizeClassesSpm, nwb, DATASET%gridShape(1), DATASET%gridShape(2)))
+        gw = -1.0_dp
+        routing = -1.0_dp
+        m_spm = 0.0_dp
+        do j = 1, DATASET%gridShape(2)
+            do i = 1, DATASET%gridShape(1)
+                associate (cell => me%env%item%colGridCells(i,j)%item)
+                    gw(i,j) = cell%gwStorage
+                    if (t == 0 .and. C%warmUpPeriod > 0 .and. allocated(cell%gwStorage_t)) then
+                        if (size(cell%gwStorage_t) >= C%warmUpPeriod) gw(i,j) = cell%gwStorage_t(C%warmUpPeriod)
+                    end if
+                    do k = 1, cell%nReaches
+                        associate (water => cell%colRiverReaches(k)%item)
+                            routing(:,k,i,j) = [water%mc_I, water%mc_O, water%mc_storage]
+                            if (allocated(water%m_spm)) m_spm(:,k,i,j) = water%m_spm
+                        end associate
+                    end do
+                end associate
+            end do
+        end do
+    end subroutine
+
+    !> Restore the groundwater store (recomputing each cell's runoff series from the saved
+    !! storage), the routing state and the water-column SPM
+    subroutine reinstateExtraState(me, gw, routing, m_spm)
+        class(Checkpoint) :: me
+        real(dp), intent(in) :: gw(:,:), routing(:,:,:,:), m_spm(:,:,:,:)
+        integer :: i, j, k
+        do j = 1, DATASET%gridShape(2)
+            do i = 1, DATASET%gridShape(1)
+                associate (cell => me%env%item%colGridCells(i,j)%item)
+                    select type (cell)
+                        type is (GridCell)
+                            if (gw(i,j) >= 0.0_dp) call cell%reapplyGroundwaterStore(gw(i,j))
+                    end select
+                    do k = 1, cell%nReaches
+                        associate (water => cell%colRiverReaches(k)%item)
+                            water%mc_I = routing(1,k,i,j)
+                            water%mc_O = routing(2,k,i,j)
+                            water%mc_storage = max(routing(3,k,i,j), 0.0_dp)
+                            if (allocated(water%m_spm)) water%m_spm = m_spm(:,k,i,j)
+                        end associate
+                    end do
+                end associate
+            end do
+        end do
+    end subroutine
+
 end module

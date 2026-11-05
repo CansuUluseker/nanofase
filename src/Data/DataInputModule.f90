@@ -256,6 +256,27 @@ module DataInputModule
         real(dp) :: pfasSeaSprayAerosolRate = 0.0_dp
         real(dp) :: windSpeed = 0.0_dp
 
+        ! Groundwater store for water (optional &groundwater constants group). Sub-surface
+        ! (and optionally surface) runoff recharges a linear store per grid cell that drains
+        ! to the cell's water bodies with the given residence time. Off (runoff goes straight
+        ! to surface water) when the residence time is <= 0. Optional (x,y) maps
+        ! 'gw_residence_time' [days], 'gw_loss_fraction', 'gw_subsurface_recharge_fraction' and
+        ! 'gw_surface_recharge_fraction' [-] override the constants where they are > 0
+        ! (residence time) or >= 0 (fractions).
+        real(dp) :: gwResidenceTimeConstant = -1.0_dp       ! Residence time; <= 0 = no store [days]
+        real(dp) :: gwSubsurfaceRechargeFraction = 1.0_dp   ! Fraction of sub-surface runoff recharging the store [-]
+        real(dp) :: gwSurfaceRechargeFraction = 0.0_dp      ! Fraction of surface runoff (quickflow) recharging the store [-]
+        real(dp) :: gwLossFractionConstant = 0.0_dp         ! Fraction of recharge lost from the model (deep aquifer, abstraction) [-]
+        real(dp) :: gwInitialStorage = -1.0_dp              ! Initial storage [m]; < 0 = steady state with the mean recharge
+        real(dp), allocatable :: gwResidenceTime(:,:)       ! 'gw_residence_time' (x,y) [days]
+        real(dp), allocatable :: gwLossFraction(:,:)        ! 'gw_loss_fraction' (x,y) [-]
+        real(dp), allocatable :: gwSubsurfaceRechargeFractionMap(:,:)  ! 'gw_subsurface_recharge_fraction' (x,y) [-]
+        ! River channel roughness and routing (&water constants; optional 'river_manning_n' map)
+        real(dp) :: riverManningNConstant = 0.035_dp          ! Manning's n for river channels [s m-1/3]
+        real(dp) :: routingCelerityFactor = 1.0_dp            ! Multiplier on the kinematic wave celerity [-]
+        real(dp), allocatable :: riverManningN(:,:)           ! 'river_manning_n' (x,y) [s m-1/3]
+        real(dp), allocatable :: gwSurfaceRechargeFractionMap(:,:)     ! 'gw_surface_recharge_fraction' (x,y) [-]
+
         ! Lake/reservoir process constants. Defaults here; can be overridden via the
         ! optional &lake namelist group in the constants file.
         real(dp) :: lakeDefaultDepth = 5.0_dp                       ! Lake segment depth when 'lake_depth' isn't in the input data [m]
@@ -1261,6 +1282,12 @@ contains
         call readPfasMap2D('sediment_organic_carbon', me%sedimentOrganicCarbon)
         call readPfasMap2D('water_salinity', me%waterSalinity)
         call readPfasMap2D('groundwater_residence_time', me%groundwaterResidenceTime)
+        ! Water groundwater store maps (optional; see gwResidenceTimeConstant)
+        call readPfasMap2D('gw_residence_time', me%gwResidenceTime)
+        call readPfasMap2D('gw_loss_fraction', me%gwLossFraction)
+        call readPfasMap2D('gw_subsurface_recharge_fraction', me%gwSubsurfaceRechargeFractionMap)
+        call readPfasMap2D('gw_surface_recharge_fraction', me%gwSurfaceRechargeFractionMap)
+        call readPfasMap2D('river_manning_n', me%riverManningN)
 
         ! -----------------------------------
         ! INITIAL CONCENTRATIONS
@@ -1630,6 +1657,7 @@ contains
                 estuary_width_expB, estuary_tidal_M2, estuary_meandering_factor, &
                 river_meandering_factor, deposition_alpha, deposition_beta, &
                 bank_erosion_alpha, bank_erosion_beta
+        real(dp) :: river_manning_n, routing_celerity_factor
         real(dp) :: hamaker_constant, resuspension_alpha, resuspension_beta, &
                     resuspension_alpha_estuary, resuspension_beta_estuary, k_diss_pristine, &
                     k_diss_transformed, k_transform_pristine, erosivity_a1, erosivity_a2, &
@@ -1652,6 +1680,8 @@ contains
             lake_epilimnion_wind_coefficient, lake_epilimnion_min_depth, &
             lake_interlayer_mixing_velocity, lake_wind_resuspension_attenuation_depth, &
             reservoir_default_release_rate
+        real(dp) :: residence_time, subsurface_recharge_fraction, surface_recharge_fraction, &
+            loss_fraction, initial_storage
 
         ! &pfas group (optional). Species arrays are sized from the config's n_pfas_species.
         integer :: nPfas
@@ -1699,7 +1729,7 @@ contains
             estuary_meandering_factor, river_meandering_factor, river_attachment_efficiency, &
             estuary_attachment_efficiency, deposition_alpha, deposition_beta, bank_erosion_alpha, &
             bank_erosion_beta, shear_rate, min_water_temperature, max_water_temperature, &
-            min_water_temperature_day_of_year
+            min_water_temperature_day_of_year, river_manning_n, routing_celerity_factor
         namelist /sediment/ porosity, initial_mass, fractional_composition_distribution, &
             default_spm_size_distribution, default_matrixembedded_distribution_to_spm, &
             sediment_enrichment_a, sediment_enrichment_k, spm_density_by_size_class
@@ -1709,6 +1739,8 @@ contains
             lake_epilimnion_wind_coefficient, lake_epilimnion_min_depth, &
             lake_interlayer_mixing_velocity, lake_wind_resuspension_attenuation_depth, &
             reservoir_default_release_rate
+        namelist /groundwater/ residence_time, subsurface_recharge_fraction, surface_recharge_fraction, &
+            loss_fraction, initial_storage
 
         ! Initialize variables
         n_biota = 0
@@ -1727,6 +1759,8 @@ contains
         darcy_velocity = defaultSoilDarcyVelocity
         estuary_meandering_factor = 0.0
         river_meandering_factor = 0.0
+        river_manning_n = me%riverManningNConstant
+        routing_celerity_factor = me%routingCelerityFactor
         shear_rate = defaultShearRate
         min_water_temperature = defaultMinWaterTemperature
         max_water_temperature = defaultMaxWaterTemperature
@@ -1751,6 +1785,11 @@ contains
         lake_interlayer_mixing_velocity = me%lakeInterlayerMixingVelocity
         lake_wind_resuspension_attenuation_depth = me%lakeWindResuspensionAttenuationDepth
         reservoir_default_release_rate = me%reservoirDefaultReleaseRate
+        residence_time = me%gwResidenceTimeConstant
+        subsurface_recharge_fraction = me%gwSubsurfaceRechargeFraction
+        surface_recharge_fraction = me%gwSurfaceRechargeFraction
+        loss_fraction = me%gwLossFractionConstant
+        initial_storage = me%gwInitialStorage
 
         ! &pfas defaults: everything off/zero, so an absent group gives an inert tracer
         nPfas = max(1, C%contaminantDim(1))
@@ -2011,6 +2050,14 @@ contains
         read(iouConstants, nml=lake, iostat=nmlIOStat)
         rewind(iouConstants)
 
+        ! The &groundwater group is optional (store off by default), but a malformed one is an error
+        read(iouConstants, nml=groundwater, iostat=nmlIOStat, iomsg=nmlIOMsg)
+        if (nmlIOStat > 0) then
+            call ERROR_HANDLER%trigger(error=ErrorInstance(code=200, message="Failed to read groundwater namelist" &
+                // new_line('A') // trim(nmlIOMsg)))
+        end if
+        rewind(iouConstants)
+
         ! The &pfas group is optional (defaults above), but a malformed one is an error
         read(iouConstants, nml=pfas, iostat=nmlIOStat, iomsg=nmlIOMsg)
         if (nmlIOStat > 0) then
@@ -2097,6 +2144,8 @@ contains
             end if
         end if
         me%riverMeanderingFactor = river_meandering_factor
+        me%riverManningNConstant = max(river_manning_n, 1.0e-6_dp)
+        me%routingCelerityFactor = max(routing_celerity_factor, 1.0e-6_dp)
         me%waterResuspensionAlpha = resuspension_alpha
         me%waterResuspensionBeta = resuspension_beta
         me%depositionAlphaConstant = deposition_alpha
@@ -2141,6 +2190,11 @@ contains
         me%lakeInterlayerMixingVelocity = lake_interlayer_mixing_velocity
         me%lakeWindResuspensionAttenuationDepth = lake_wind_resuspension_attenuation_depth
         me%reservoirDefaultReleaseRate = reservoir_default_release_rate
+        me%gwResidenceTimeConstant = residence_time
+        me%gwSubsurfaceRechargeFraction = min(max(subsurface_recharge_fraction, 0.0_dp), 1.0_dp)
+        me%gwSurfaceRechargeFraction = min(max(surface_recharge_fraction, 0.0_dp), 1.0_dp)
+        me%gwLossFractionConstant = min(max(loss_fraction, 0.0_dp), 1.0_dp)
+        me%gwInitialStorage = initial_storage
 
         ! PFAS. Partition coefficients are converted from L kg-1 to m3 kg-1
         me%pfasSpeciesNames = species_names

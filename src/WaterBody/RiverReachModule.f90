@@ -23,6 +23,9 @@ module RiverReachModule
         procedure :: update => updateRiverReach
         procedure :: updateDisplacement => updateDisplacementRiverReach
         procedure :: setDimensions
+        procedure :: setDimensionsFromFlow
+        procedure :: routeAndTransport => routeAndTransportRiverReach
+        procedure :: muskingumCunge => muskingumCungeRiverReach
         ! Data handlers
         procedure :: parseInputData => parseInputDataRiverReach
         ! Calculators
@@ -186,6 +189,11 @@ contains
         call me%setResuspensionRate(me%Q_in_total / C%timeStep, T_water_t)
         call me%setSettlingRate(T_water_t)
 
+        if (C%includeRouting) then
+            ! Sub-daily Muskingum-Cunge routing of water, with SPM and contaminant carried
+            ! through the reach by the routed flow, sub-step by sub-step
+            call me%routeAndTransport(t, T_water_t)
+        else
         ! ----------------------------------------------------------------------
         ! Displacement splitting (same logic as old NanoFASE)
         ! ----------------------------------------------------------------------
@@ -217,6 +225,7 @@ contains
         end do
 
         call dj_contaminant_in%finalise()
+        end if
 
         ! Final concentrations based on the calculated masses [kg/m³]
         me%C_spm = divideCheckZero(me%m_spm, me%volume)
@@ -270,6 +279,8 @@ contains
         real(dp)            :: dj_spm_outflow(C%nSizeClassesSpm)
         real(dp)            :: m_spm_preupdate(C%nSizeClassesSpm)
         real(dp)            :: k_outflow
+        real(dp)            :: f_avail                                          ! Fraction of outflow + deposition the SPM available can supply
+        integer             :: i                                                ! Size class iterator
 
         ! Contaminant bookkeeping
         type(Contaminant)   :: dj_contaminant_deposit
@@ -312,6 +323,19 @@ contains
             ! actual resuspension flux
             dj_spm_resus_perArea  = dj_spm_resus_perArea - dj_spm_resus_perArea_
             dj_spm_resus          = dj_spm_resus_perArea * me%bedArea
+
+            ! Outflow and deposition are each limited to the SPM available, but together
+            ! they can exceed it (e.g. high flow and fast settling in one displacement).
+            ! Scale both down so the water column never gives away more SPM than it holds
+            ! (previously the clamp of m_spm at zero below created the excess).
+            do i = 1, C%nSizeClassesSpm
+                if (dj_spm_outflow(i) + dj_spm_deposit(i) > me%m_spm(i) + dj_spm_in(i) + dj_spm_resus(i)) then
+                    f_avail = (me%m_spm(i) + dj_spm_in(i) + dj_spm_resus(i)) &
+                        / (dj_spm_outflow(i) + dj_spm_deposit(i))
+                    dj_spm_outflow(i) = dj_spm_outflow(i) * f_avail
+                    dj_spm_deposit(i) = dj_spm_deposit(i) * f_avail
+                end if
+            end do
 
             ! Move SPM mass to bed (updates water depth via depositToBed)
             call rslt%addErrors(.errors. me%depositToBed(dj_spm_deposit))
@@ -491,6 +515,227 @@ contains
         me%surfaceArea = me%bedArea                       ! For river reaches, set surface area equal to bed area [m2]
         me%volume = me%depth*me%width*me%length*me%f_m
         me%velocity = me%calculateVelocity(me%depth, me%Q_in_total/C%timeStep, me%width)
+    end subroutine
+
+    !> Set the reach dimensions from a given flow rate [m3/s] (used with routing, where the
+    !! representative flow through the reach differs from its daily inflow)
+    subroutine setDimensionsFromFlow(me, Q, t)
+        class(RiverReach)   :: me       !! This reach
+        real(dp)            :: Q        !! Flow rate [m3/s]
+        integer             :: t        !! The current timestep index
+        me%width = me%calculateWidth(Q)
+        me%depth = me%calculateDepth(me%width, me%slope, Q, t)
+        me%xsArea = me%depth*me%width
+        me%bedArea = me%width*me%length*me%f_m
+        me%surfaceArea = me%bedArea
+        me%volume = me%depth*me%width*me%length*me%f_m
+        me%velocity = me%calculateVelocity(me%depth, Q, me%width)
+    end subroutine
+
+    !> Route this timestep's water through the reach (Muskingum-Cunge, at C%nRoutingSubsteps
+    !! sub-steps), and carry SPM and contaminant through it with the routed flow. Inflows
+    !! from upstream water bodies are taken per sub-step where they provide them (routed
+    !! river reaches), else spread evenly over the timestep; lateral inputs (runoff,
+    !! erosion, sources) are spread evenly. The sub-step outflows are stored for the
+    !! water body downstream. Daily flow and flux totals are accumulated as without routing.
+    subroutine routeAndTransportRiverReach(me, t, T_water_t)
+        class(RiverReach), intent(inout) :: me
+        integer, intent(in)  :: t
+        real(dp), intent(in) :: T_water_t
+        integer :: nSub, k, i, d, nD
+        real(dp) :: dts, Qgeom, Qout0
+        real(dp) :: I_vol(C%nRoutingSubsteps), I_rate(C%nRoutingSubsteps)
+        real(dp) :: O_vol(C%nRoutingSubsteps), O_rate(C%nRoutingSubsteps)
+        real(dp) :: spm_in(C%nSizeClassesSpm, C%nRoutingSubsteps), spm_lateral(C%nSizeClassesSpm)
+        real(dp) :: spm0(C%nSizeClassesSpm)
+        type(Contaminant) :: cont_lateral, cont_in_k, cont_out0, dcont
+        type(Result) :: rslt
+        logical :: withContaminant
+
+        nSub = C%nRoutingSubsteps
+        dts = real(C%timeStep, dp) / nSub
+        withContaminant = .not. C%ignoreContaminant
+
+        if (.not. allocated(me%Q_outflow_sub)) then
+            allocate(me%Q_outflow_sub(nSub), me%Q_outflow_rate_sub(nSub), me%j_spm_outflow_sub(C%nSizeClassesSpm, nSub))
+            if (withContaminant) allocate(me%j_contaminant_outflow_sub(nSub))
+        end if
+
+        ! ---- Inflow hydrograph: upstream water bodies + lateral runoff ----
+        I_vol = me%Q%runoff / nSub
+        I_rate = me%Q%runoff / C%timeStep
+        spm_lateral = (me%j_spm%soilErosion + me%j_spm%bankErosion) / nSub
+        do k = 1, nSub
+            spm_in(:, k) = spm_lateral
+        end do
+        do i = 1, me%nInflows
+            associate (up => me%inflows(i)%item)
+                if (allocated(up%Q_outflow_sub)) then
+                    if (size(up%Q_outflow_sub) == nSub) then
+                        I_vol = I_vol + up%Q_outflow_sub
+                        I_rate = I_rate + up%Q_outflow_rate_sub
+                        spm_in = spm_in + up%j_spm_outflow_sub
+                        cycle
+                    end if
+                end if
+                ! Not routed (lake, estuary): its daily outflow, spread evenly
+                I_vol = I_vol - up%Q%outflow / nSub
+                I_rate = I_rate - up%Q%outflow / C%timeStep
+                do k = 1, nSub
+                    spm_in(:, k) = spm_in(:, k) - up%j_spm%outflow / nSub
+                end do
+            end associate
+        end do
+
+        ! ---- Route the water ----
+        call me%muskingumCunge(I_rate, I_vol, O_rate, O_vol, dts)
+
+        ! ---- Geometry and process rates from the routed flow (mean of in and out) ----
+        Qgeom = 0.5_dp * (sum(I_vol) + sum(O_vol)) / C%timeStep
+        call me%setDimensionsFromFlow(Qgeom, t)
+        call me%setResuspensionRate(Qgeom, T_water_t)
+        call me%setSettlingRate(T_water_t)
+
+        ! ---- Lateral contaminant inputs, spread evenly over the sub-steps ----
+        if (withContaminant) then
+            call rslt%addErrors(.errors. cont_lateral%create())
+            call cont_lateral%add_scaled(me%j_contaminant_soilErosion,    1.0_dp / nSub)
+            call cont_lateral%add_scaled(me%j_contaminant_pointSources,   1.0_dp / nSub)
+            call cont_lateral%add_scaled(me%j_contaminant_diffuseSources, 1.0_dp / nSub)
+            call cont_lateral%add_scaled(me%j_contaminant_dissolvedRunoff, 1.0_dp / nSub)
+        end if
+
+        ! ---- Transport, sub-step by sub-step ----
+        do k = 1, nSub
+            if (withContaminant) then
+                call rslt%addErrors(.errors. cont_in_k%create())
+                call cont_in_k%add(cont_lateral)
+                do i = 1, me%nInflows
+                    associate (up => me%inflows(i)%item)
+                        if (allocated(up%j_contaminant_outflow_sub)) then
+                            if (size(up%j_contaminant_outflow_sub) == nSub) then
+                                call cont_in_k%add(up%j_contaminant_outflow_sub(k))
+                                cycle
+                            end if
+                        end if
+                        call cont_in_k%add_scaled(up%get_j_contaminant_outflow(), 1.0_dp / nSub)
+                    end associate
+                end do
+                cont_out0 = me%j_contaminant_outflow
+            end if
+            Qout0 = me%Q%outflow
+            spm0 = me%j_spm%outflow
+            if (isZero(me%volume)) then
+                nD = 1
+            else
+                nD = max(1, ceiling(max(I_vol(k), O_vol(k)) / me%volume))
+            end if
+            if (withContaminant) then
+                call rslt%addErrors(.errors. dcont%create())
+                call dcont%add_scaled(cont_in_k, 1.0_dp / nD)
+            end if
+            do d = 1, nD
+                call me%updateDisplacement(t, (k - 1) * 1000 + d, dts / nD, O_vol(k) / nD, &
+                                           spm_in(:, k) / nD, dcont, T_water_t)
+            end do
+            ! Sub-step outflows for the water body downstream (stored positive)
+            me%Q_outflow_sub(k) = Qout0 - me%Q%outflow
+            me%Q_outflow_rate_sub(k) = O_rate(k)
+            me%j_spm_outflow_sub(:, k) = spm0 - me%j_spm%outflow
+            if (withContaminant) then
+                me%j_contaminant_outflow_sub(k) = me%j_contaminant_outflow
+                call me%j_contaminant_outflow_sub(k)%add_scaled(cont_out0, -1.0_dp)
+                call me%j_contaminant_outflow_sub(k)%clamp_negative()
+                call dcont%finalise()
+                call cont_in_k%finalise()
+                call cont_out0%finalise()
+            end if
+        end do
+        if (withContaminant) call cont_lateral%finalise()
+
+        call rslt%addToTrace("Routing " // trim(me%ref) // " on timestep #" // trim(str(t)))
+        call LOGR%toFile(errors = .errors. rslt)
+        call ERROR_HANDLER%trigger(errors = .errors. rslt)
+    end subroutine
+
+    !> Variable-parameter Muskingum-Cunge routing of one timestep's inflow hydrograph.
+    !! Inflow and outflow are given as rates at the end of each sub-step [m3/s] and as
+    !! volumes over each sub-step [m3] (trapezoidal). The wave celerity is c = (5/3) v
+    !! (kinematic wave, wide channel), with the velocity v from Manning's equation in its
+    !! wide-channel form at the reference flow Q0 (mean of the current inflow and the last
+    !! outflow), times DATASET%routingCelerityFactor. Then K = L / c and
+    !! X = 0.5 (1 - Q0 / (W S c L)), clamped to [0, 0.5]. Each sub-step is split into
+    !! internal steps no longer than K, and X is limited so that all three routing
+    !! coefficients are non-negative (no negative outflows or oscillations).
+    subroutine muskingumCungeRiverReach(me, I_rate, I_vol, O_rate, O_vol, dts)
+        class(RiverReach), intent(inout) :: me
+        real(dp), intent(in)  :: I_rate(:), I_vol(:)
+        real(dp), intent(out) :: O_rate(:), O_vol(:)
+        real(dp), intent(in)  :: dts
+        integer :: k, j, nInt
+        real(dp) :: Q0, W, h, v, cel, L, S, K_, X, dti, denom, C0, C1, C2, I1, I2, O1, O2, vol
+
+        L = me%length * me%f_m
+        S = max(me%slope, C%epsilon)
+        if (me%mc_O < 0.0_dp) then
+            ! First timestep: start at steady state with the first sub-step's inflow
+            me%mc_I = I_rate(1)
+            me%mc_O = I_rate(1)
+            call celerity(I_rate(1), K_, X)
+            me%mc_storage = K_ * I_rate(1)
+        end if
+        do k = 1, size(I_rate)
+            Q0 = 0.5_dp * (I_rate(k) + me%mc_O)
+            if (Q0 <= C%epsilon .or. L <= C%epsilon) then
+                ! No flow (or no reach length): pass the inflow straight through
+                O_rate(k) = I_rate(k)
+                O_vol(k) = I_vol(k)
+            else
+                call celerity(Q0, K_, X)
+                nInt = min(max(1, ceiling(dts / K_)), 100000)
+                dti = dts / nInt
+                X = min(X, 0.5_dp * dti / K_)                     ! keeps C0 >= 0
+                denom = K_ * (1.0_dp - X) + 0.5_dp * dti
+                C0 = (0.5_dp * dti - K_ * X) / denom
+                C1 = (0.5_dp * dti + K_ * X) / denom
+                C2 = (K_ * (1.0_dp - X) - 0.5_dp * dti) / denom   ! >= 0 as dti <= K
+                O1 = me%mc_O
+                vol = 0.0_dp
+                do j = 1, nInt
+                    I1 = me%mc_I + (I_rate(k) - me%mc_I) * real(j - 1, dp) / nInt
+                    I2 = me%mc_I + (I_rate(k) - me%mc_I) * real(j, dp) / nInt
+                    O2 = max(C0 * I2 + C1 * I1 + C2 * O1, 0.0_dp)
+                    vol = vol + 0.5_dp * (O1 + O2) * dti
+                    O1 = O2
+                end do
+                ! The outflow can't exceed the water available in the reach
+                if (vol > me%mc_storage + I_vol(k)) then
+                    vol = max(me%mc_storage + I_vol(k), 0.0_dp)
+                    O1 = vol / dts
+                end if
+                O_rate(k) = O1
+                O_vol(k) = vol
+            end if
+            me%mc_storage = max(me%mc_storage + I_vol(k) - O_vol(k), 0.0_dp)
+            me%mc_I = I_rate(k)
+            me%mc_O = O_rate(k)
+        end do
+
+    contains
+
+        !> K [s] and X [-] at flow Q [m3/s]
+        subroutine celerity(Q, Kout, Xout)
+            real(dp), intent(in)  :: Q
+            real(dp), intent(out) :: Kout, Xout
+            real(dp) :: Qs
+            Qs = max(Q, 1.0e-9_dp)
+            W = me%calculateWidth(Qs)
+            h = (me%n * Qs / (W * sqrt(S))) ** 0.6_dp           ! Manning, wide channel (R ~ h)
+            v = Qs / (W * h)
+            cel = (5.0_dp / 3.0_dp) * v * DATASET%routingCelerityFactor
+            Kout = L / cel
+            Xout = min(max(0.5_dp * (1.0_dp - Qs / (W * S * cel * L)), 0.0_dp), 0.5_dp)
+        end subroutine
     end subroutine
 
     !> Parse data from the input file for this river reach

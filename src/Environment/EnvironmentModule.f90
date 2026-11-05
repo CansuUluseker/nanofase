@@ -23,6 +23,7 @@ module EnvironmentModule
         procedure :: updateReach => updateReachEnvironment
         procedure :: determineStreamOrder => determineStreamOrderEnvironment
         procedure :: parseNewBatchData => parseNewBatchDataEnvironment
+        procedure :: continueGroundwaterStore => continueGroundwaterStoreEnvironment
         ! Getters
         procedure :: parseInputData => parseInputDataEnvironment
         procedure :: get_m_contaminant => get_m_contaminantEnvironment
@@ -406,6 +407,27 @@ module EnvironmentModule
     end function parseInputDataEnvironment
 
 
+
+    !> After a warm up period of nWarm timesteps, recompute each grid cell's runoff series so
+    !! that its groundwater store continues from its state at the end of the warm up
+    subroutine continueGroundwaterStoreEnvironment(me, nWarm)
+        class(Environment), target :: me
+        integer, intent(in) :: nWarm
+        integer :: x, y
+        do y = 1, DATASET%gridShape(2)
+            do x = 1, DATASET%gridShape(1)
+                associate (cell => me%colGridCells(x,y)%item)
+                    select type (cell)
+                        type is (GridCell)
+                            if (allocated(cell%gwStorage_t)) then
+                                if (size(cell%gwStorage_t) >= nWarm .and. nWarm > 0) &
+                                    call cell%reapplyGroundwaterStore(cell%gwStorage_t(nWarm))
+                            end if
+                    end select
+                end associate
+            end do
+        end do
+    end subroutine
 
     subroutine parseNewBatchDataEnvironment(me)
         class(Environment), intent(inout) :: me

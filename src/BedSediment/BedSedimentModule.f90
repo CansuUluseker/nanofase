@@ -448,11 +448,15 @@ contains
                 call FS(S, L)%set(Mf_in = G%M_f(), Vw_in = G%V_w(), f_comp_in = G%f_comp)
                 L = L + 1
             end do
-            if (FS_resusp(S) > 0) then
+            ! Only build the (non-critical) warning if warnings are on: constructing and
+            ! propagating it on every displacement is a significant cost otherwise
+            if (FS_resusp(S) > 0 .and. C%triggerWarnings) then
                 call r%addError(ErrorInstance(1, "All sediment of size class " // trim(str(S)) // " resuspended", .false., [tr]))
             end if
         end do
-        call r%setData(FS)
+        ! The resuspended FineSediment array is not stored in r: no caller uses it, and copying
+        ! a derived type with allocatable components into the Result's class(*) storage leaks
+        ! those components (gfortran doesn't free them), ~11 MB per simulated day for the Colne
         do S = 1, me%nSizeClasses
             do L = 1, C%nSedimentLayers
                 me%delta_sed(2, L + 2, S) = me%delta_sed(2, L + 2, S) + delta_l_r(L, S)   ! l -> r

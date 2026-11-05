@@ -106,8 +106,12 @@ module ReachModule
         ! WaterBody initialises the variables common to all water bodies
         call me%WaterBody%allocateAndInitialise()
 
-        ! Environment defaults
-        me%n = C%n_river
+        ! Environment defaults. Manning's n from the &water constant (default 0.035, the
+        ! previous fixed value), or the 'river_manning_n' map where it is positive
+        me%n = DATASET%riverManningNConstant
+        if (allocated(DATASET%riverManningN)) then
+            if (DATASET%riverManningN(me%x, me%y) > 0.0_dp) me%n = DATASET%riverManningN(me%x, me%y)
+        end if
 
         ! Main WATER contaminant state (sizes, rates, etc.)
        call r%addErrors(.errors. me%m_contaminant%create_from_data('water', DATASET%contaminantDensity, &

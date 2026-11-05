@@ -19,9 +19,23 @@ preserve_timestep = .false.                             ! Should the timestep fr
 
 A checkpoint can be saved at the end of a model run by setting `save_checkpoint` to `.true.`. When a checkpoint is saved, a binary file is created in a specified location with the current values of all dynamic variables (the variables whose value on a particular timestep is a function of their value on the previous timestep). The location of this checkpoint is given by `checkpoint_file`. Make sure the directory you wish to save the checkpoint to exists.
 
+The checkpoint holds the state of:
+
+- soil profiles and soil layers: contaminant masses and soil water;
+- water bodies: contaminant mass, volume, bed area, water flows and SPM fluxes, and the suspended sediment (SPM) mass in the water column;
+- bed sediment: contaminant masses and, for each layer and size class, the fine sediment mass, water volume and composition;
+- the groundwater store: the water held in each grid cell's store (see [](input-data:groundwater));
+- channel routing: for each river reach, the inflow and outflow at the end of the last routing sub-step and the water held in channel storage (see [](input-data:routing)).
+
+A checkpoint can also be saved at the end of the warm up period (`save_checkpoint_after_warm_up`). In that case, the groundwater storage saved is that at the end of the warm up.
+
+```{note}
+The groundwater store, channel routing and water column SPM state were added to the checkpoint file in a later version of the model, as an extra record at the end of the file. Older checkpoint files can still be reinstated: the model logs a warning, and these states start from their initial values (the groundwater store at steady state, routing at steady state, and no SPM in the water column).
+```
+
 ## Reinstating a checkpoint
 
-A previously saved checkpoint can be reinstated at the beginning of a model run, from the checkpoint at `checkpoint_file`, by setting `reinstate_checkpoint` to `.true.`.
+A previously saved checkpoint can be reinstated at the beginning of a model run, from the checkpoint at `checkpoint_file`, by setting `reinstate_checkpoint` to `.true.`. The groundwater store is applied to each grid cell's runoff when the input data are read, before the checkpoint is reinstated, so on reinstating, each grid cell's runoff is recomputed with its store starting from the saved storage.
 
 ## Interoperability and checkpoint file size
 

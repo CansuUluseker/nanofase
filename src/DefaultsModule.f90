@@ -31,7 +31,9 @@ module DefaultsModule
         character(len=50)   :: steadyStateMode = 'sediment_size_distribution'   ! Run to steady state of which variable?
         real(dp)            :: steadyStateDelta = 1e-5
         real                :: minStreamSlope = 0.0001                  ! [m/m]
-        integer             :: minEstuaryTimestep = 3600                ! 1 hour [s] 
+        integer             :: minEstuaryTimestep = 3600                ! 1 hour [s]
+        logical             :: includeRouting = .false.                 ! Muskingum-Cunge channel routing for river reaches?
+        integer             :: routingTimestep = 3600                   ! Routing sub-step length [s] 
         logical             :: writeToLog = .true.
         integer             :: warmUpPeriod = 0                         ! How many time steps to warm the model up for
         logical             :: bashColors = .true.                      ! Should we print colored output to the console?

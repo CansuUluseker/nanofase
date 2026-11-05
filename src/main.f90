@@ -90,6 +90,9 @@ program main
         do t = 1, C%warmUpPeriod
             call env%update(t, t, .true.)
         end do
+        ! The groundwater store's runoff series is precomputed for the whole batch, so
+        ! continue it from its state at the end of the warm up (as every other state does)
+        call env%continueGroundwaterStore(C%warmUpPeriod)
         ! Log that we're finished warming up and on to the real model
         call LOGR%add("Finished warm up period", COLOR_BLUE)
         ! Have we been asked to create a checkpoint after the warm up period?

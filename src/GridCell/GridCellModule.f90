@@ -32,6 +32,8 @@ module GridCellModule
         ! Data handlers
         procedure :: parseInputData => parseInputDataGridCell
         procedure :: parseNewBatchData => parseNewBatchDataGridCell
+        procedure :: applyGroundwaterStore => applyGroundwaterStoreGridCell
+        procedure :: reapplyGroundwaterStore => reapplyGroundwaterStoreGridCell
         ! Getters
         procedure :: get_Q_outflow => get_Q_outflowGridCell
         procedure :: get_j_spm_outflow => get_j_spm_outflowGridCell
@@ -424,6 +426,7 @@ module GridCellModule
         else
             me%q_runoff_timeSeries = 0.0_dp
         end if
+        call me%applyGroundwaterStore()
 
         if (allocated(DATASET%precip)) then
             me%q_precip_timeSeries = DATASET%precip(me%x, me%y, :)
@@ -463,6 +466,7 @@ module GridCellModule
             else
                 me%q_runoff_timeSeries = 0.0_dp
             end if
+            call me%applyGroundwaterStore()
 
             if (allocated(DATASET%precip)) then
                 me%q_precip_timeSeries = DATASET%precip(me%x, me%y, :)
@@ -487,6 +491,106 @@ module GridCellModule
                 call me%colRiverReaches(i)%item%parseNewBatchData()
             end do
         end if
+    end subroutine
+
+    !> Groundwater store for water. Runoff from the hydrology input is split into surface
+    !! runoff (quickflow) and sub-surface runoff (total - quickflow). Fractions of each
+    !! (&groundwater subsurface_recharge_fraction, surface_recharge_fraction) recharge a
+    !! linear store, a fraction of that recharge (loss_fraction) leaves the model (e.g.
+    !! deep aquifer export, abstraction), and the store drains to the cell's water bodies
+    !! as baseflow, a fraction 1 - exp(-dt/tau) of its content per time step. The rest of
+    !! the runoff reaches the water bodies directly. The store has no feedback on the
+    !! rest of the model, so the cell's runoff time series is transformed once here, with
+    !! the store state carried across batches. The surface runoff that drives soil erosion
+    !! and sediment transport capacity (DATASET%quickflow) is not changed. The runoff series
+    !! is cleaned (fill/NaN/negative -> 0) even when the store is off. Map values <= 0 fall
+    !! back to the constants.
+    subroutine applyGroundwaterStoreGridCell(me)
+        class(GridCell) :: me
+        real(dp) :: tau, loss, k, q_total, q_surf, q_sub, recharge, baseflow, meanRecharge
+        real(dp) :: f_sub, f_surf
+        real(dp), allocatable :: recharges(:)
+        integer :: t, nt
+
+        ! Clean the runoff series whether or not the store is used: fill values, NaN and
+        ! negative runoff become zero
+        do t = 1, size(me%q_runoff_timeSeries)
+            q_total = me%q_runoff_timeSeries(t)
+            if (q_total /= q_total .or. q_total > 1.0e10_dp .or. q_total < 0.0_dp) me%q_runoff_timeSeries(t) = 0.0_dp
+        end do
+
+        tau = DATASET%gwResidenceTimeConstant
+        if (allocated(DATASET%gwResidenceTime)) then
+            if (DATASET%gwResidenceTime(me%x, me%y) > 0.0_dp) tau = DATASET%gwResidenceTime(me%x, me%y)
+        end if
+        if (tau <= 0.0_dp) return
+        loss = DATASET%gwLossFractionConstant
+        if (allocated(DATASET%gwLossFraction)) then
+            if (DATASET%gwLossFraction(me%x, me%y) >= 0.0_dp) loss = min(DATASET%gwLossFraction(me%x, me%y), 1.0_dp)
+        end if
+        f_sub = DATASET%gwSubsurfaceRechargeFraction
+        if (allocated(DATASET%gwSubsurfaceRechargeFractionMap)) then
+            if (DATASET%gwSubsurfaceRechargeFractionMap(me%x, me%y) >= 0.0_dp) &
+                f_sub = min(DATASET%gwSubsurfaceRechargeFractionMap(me%x, me%y), 1.0_dp)
+        end if
+        f_surf = DATASET%gwSurfaceRechargeFraction
+        if (allocated(DATASET%gwSurfaceRechargeFractionMap)) then
+            if (DATASET%gwSurfaceRechargeFractionMap(me%x, me%y) >= 0.0_dp) &
+                f_surf = min(DATASET%gwSurfaceRechargeFractionMap(me%x, me%y), 1.0_dp)
+        end if
+        ! Fraction of the store that drains per time step (tau in days)
+        k = 1.0_dp - exp(-real(C%timeStep, dp) / (tau * 86400.0_dp))
+
+        nt = size(me%q_runoff_timeSeries)
+        allocate(recharges(nt))
+        do t = 1, nt
+            q_total = me%q_runoff_timeSeries(t)                                     ! Cleaned above
+            q_surf = 0.0_dp
+            if (allocated(DATASET%quickflow)) q_surf = min(max(real(DATASET%quickflow(me%x, me%y, t), dp), 0.0_dp), q_total)
+            if (q_surf /= q_surf) q_surf = 0.0_dp
+            q_sub = q_total - q_surf
+            recharges(t) = f_sub * q_sub + f_surf * q_surf
+            ! Direct runoff to surface water
+            me%q_runoff_timeSeries(t) = q_total - recharges(t)
+            recharges(t) = recharges(t) * (1.0_dp - loss)
+        end do
+
+        ! Initialise the store on the first call: either as given, or at steady state with
+        ! the mean recharge (so that baseflow starts at the mean recharge rate)
+        if (me%gwStorage < 0.0_dp) then
+            if (DATASET%gwInitialStorage >= 0.0_dp) then
+                me%gwStorage = DATASET%gwInitialStorage
+            else
+                meanRecharge = sum(recharges) / max(nt, 1)
+                me%gwStorage = meanRecharge * (1.0_dp - k) / k
+            end if
+        end if
+
+        if (allocated(me%gwStorage_t)) deallocate(me%gwStorage_t)
+        allocate(me%gwStorage_t(nt))
+        do t = 1, nt
+            me%gwStorage = me%gwStorage + recharges(t)
+            baseflow = me%gwStorage * k
+            me%gwStorage = me%gwStorage - baseflow
+            me%q_runoff_timeSeries(t) = me%q_runoff_timeSeries(t) + baseflow
+            me%gwStorage_t(t) = me%gwStorage
+        end do
+    end subroutine
+
+    !> Recompute this cell's runoff series with the groundwater store starting from the given
+    !! storage [m], e.g. after reinstating a checkpoint (the series is otherwise computed
+    !! once, when the input data are parsed, before any checkpoint is read)
+    subroutine reapplyGroundwaterStoreGridCell(me, storage)
+        class(GridCell) :: me
+        real(dp), intent(in) :: storage
+        if (me%isEmpty .or. storage < 0.0_dp) return
+        if (allocated(DATASET%runoff)) then
+            me%q_runoff_timeSeries = DATASET%runoff(me%x, me%y, :)
+        else
+            me%q_runoff_timeSeries = 0.0_dp
+        end if
+        me%gwStorage = storage
+        call me%applyGroundwaterStore()
     end subroutine
 
 !---------------!

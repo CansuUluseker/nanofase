@@ -40,6 +40,7 @@ module GlobalsModule
         logical             :: writeNetCDF                      !! Should output data be written as NetCDF file?
         character(len=3)    :: netCDFWriteMode                  !! Should NetCDF output be written on each timestep or at the end of the chunk?
         logical             :: writeCompartmentStats            !! Should a file with summary stats for each compartment (soil, water, sediment) be output?
+        character(len=64), allocatable :: outputVariables(:)    !! NetCDF output variables to write; empty = all
         logical             :: writeMetadataAsComment           !! Should CSV files be prepended with metadata as a #-delimited comment?
         logical             :: includeWaterbodyBreakdown        !! Should the surface water output include breakdown of waterbodies?
         logical             :: includeSedimentLayerBreakdown    !! Include breakdown of data over sediment layers?
@@ -95,6 +96,9 @@ module GlobalsModule
         logical             :: includeEstuary                   !! Should we simulate an estuary, or treat everything as a river?
         logical             :: includeBankErosion               !! Should we simulate the inflow of sediment from bank erosion?
         logical             :: includeLakes                     !! Should we simulate lakes/reservoirs where flagged in input data, or treat them as rivers?
+        logical             :: includeRouting                   !! Route water through river reaches (Muskingum-Cunge) at a sub-daily step?
+        integer             :: routingTimestep                  !! Length of a routing sub-step [s]
+        integer             :: nRoutingSubsteps = 1             !! Routing sub-steps per model timestep
 
         ! Hydrology input adapter. These map whichever runoff components the input
         ! dataset provides onto the total and surface runoff required by the model.
@@ -226,11 +230,14 @@ module GlobalsModule
         logical :: include_clay_enrichment
         logical :: include_waterbody_breakdown
         logical :: write_compartment_stats
+        character(len=64) :: output_variables(200)
         logical :: include_estuary
         logical :: bash_colors
         logical :: save_checkpoint_after_warm_up
         logical :: include_bank_erosion
         logical :: include_lakes
+        logical :: include_routing
+        integer :: routing_timestep
         logical :: include_soil_erosion
         logical :: ignore_contaminant
 
@@ -242,7 +249,7 @@ module GlobalsModule
         namelist /data/ input_file, constants_file, output_path
         namelist /output/ write_metadata_as_comment, include_sediment_layer_breakdown, include_soil_layer_breakdown, &
             soil_pec_units, sediment_pec_units, include_soil_state_breakdown, write_csv, include_sediment_fluxes, &
-            include_soil_erosion_yields, include_spm_size_class_breakdown, include_waterbody_breakdown, write_compartment_stats, &
+            include_soil_erosion_yields, include_spm_size_class_breakdown, include_waterbody_breakdown, write_compartment_stats, output_variables, &
             write_netcdf, netcdf_write_mode
         namelist /run/ timestep, n_timesteps, epsilon, error_output, log_file_path, start_date, warm_up_period, &
             description, trigger_warnings, simulation_mask, write_to_log, output_hash, ignore_contaminant, bash_colors
@@ -251,7 +258,8 @@ module GlobalsModule
         namelist /steady_state/ run_to_steady_state, mode, delta
         namelist /soil/ soil_layer_depth, include_bioturbation, include_attachment, include_clay_enrichment, include_soil_erosion
         namelist /sediment/ spm_size_classes, include_bed_sediment, sediment_particle_densities, sediment_layer_depth
-        namelist /water/ min_stream_slope, min_estuary_timestep, include_estuary, include_bank_erosion, include_lakes
+        namelist /water/ min_stream_slope, min_estuary_timestep, include_estuary, include_bank_erosion, include_lakes, &
+            include_routing, routing_timestep
         namelist /sources/ include_point_sources
         namelist /hydrology/ total_runoff_variable, surface_runoff_variable, subsurface_runoff_variable, &
             surface_runoff_fraction
@@ -291,10 +299,13 @@ module GlobalsModule
         min_estuary_timestep = configDefaults%minEstuaryTimestep
         include_waterbody_breakdown = configDefaults%includeWaterbodyBreakdown
         write_compartment_stats = configDefaults%writeCompartmentStats
+        output_variables = ''
         ignore_contaminant = configDefaults%ignoreContaminant
         include_estuary = configDefaults%includeEstuary
         include_bank_erosion = configDefaults%includeBankErosion
         include_lakes = configDefaults%includeLakes
+        include_routing = configDefaults%includeRouting
+        routing_timestep = configDefaults%routingTimestep
         warm_up_period = configDefaults%warmUpPeriod
         bash_colors = configDefaults%bashColors
         include_soil_erosion = configDefaults%includeSoilErosion
@@ -414,6 +425,8 @@ module GlobalsModule
         C%netCDFWriteMode = netcdf_write_mode
         C%writeMetadataAsComment = write_metadata_as_comment
         C%writeCompartmentStats = write_compartment_stats
+        ! Only the non-empty entries; an empty list means "write every variable"
+        C%outputVariables = pack(output_variables, len_trim(output_variables) > 0)
         C%includeWaterbodyBreakdown = include_waterbody_breakdown
         C%includeSedimentLayerBreakdown = include_sediment_layer_breakdown
         C%includeSoilLayerBreakdown = include_soil_layer_breakdown
@@ -485,6 +498,10 @@ module GlobalsModule
         C%includeEstuary = include_estuary
         C%includeBankErosion = include_bank_erosion
         C%includeLakes = include_lakes
+        C%includeRouting = include_routing
+        C%routingTimestep = routing_timestep
+        ! Whole number of routing sub-steps per timestep (the sub-step is timestep / n)
+        if (C%includeRouting) C%nRoutingSubsteps = max(1, nint(real(C%timeStep, dp) / max(1, C%routingTimestep)))
         ! Sources
         C%includePointSources = include_point_sources
         ! Hydrology input adapter

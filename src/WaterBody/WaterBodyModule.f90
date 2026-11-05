@@ -52,6 +52,17 @@ module WaterBodyModule
         integer, allocatable    :: neighboursArray(:,:)             !! Neighbouring waterbodies, as array of indices
         type(WaterBodyPointer), allocatable :: neighbours(:)     !! Neighbouring waterbodies
         real(dp)                :: Q_in_total                       !! Total inflow of water [m3/timestep]
+        ! Channel routing (config &water include_routing). River reaches route water at a
+        ! sub-daily step and pass these sub-step outflows to the water body downstream.
+        ! Water bodies that don't allocate them (lakes, estuaries, or routing off) are
+        ! treated as spreading their daily outflow evenly over the timestep.
+        real(dp), allocatable   :: Q_outflow_sub(:)                 !! Outflow volume in each routing sub-step [m3]
+        real(dp), allocatable   :: Q_outflow_rate_sub(:)            !! Outflow rate at the end of each sub-step [m3/s]
+        real(dp), allocatable   :: j_spm_outflow_sub(:,:)           !! SPM outflow per sub-step and size class [kg]
+        type(Contaminant), allocatable :: j_contaminant_outflow_sub(:)  !! Contaminant outflow per sub-step [kg]
+        real(dp)                :: mc_I = -1.0_dp                   !! Muskingum-Cunge inflow rate at the end of the last sub-step [m3/s]; < 0 = not initialised
+        real(dp)                :: mc_O = -1.0_dp                   !! Muskingum-Cunge outflow rate at the end of the last sub-step [m3/s]
+        real(dp)                :: mc_storage = 0.0_dp              !! Water in channel storage, from the routing water balance [m3]
         real(dp), allocatable   :: k_resus(:)                       !! Resuspension rate for a given timestep [s-1]
         real(dp), allocatable   :: k_settle(:)                      !! Sediment settling rate on a given timestep [s-1]
         real(dp), allocatable   :: W_settle_spm(:)                  !! SPM settling velocity [m/s]
