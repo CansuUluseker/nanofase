@@ -41,7 +41,7 @@
     particle_density = 2500.0
 
     !! Do not use nanoparticle attachment as PFAS sorption.
-    soil_constant_attachment_efficiency = 0.0
+    soil_attachment_efficiency = 0.0
 
     erosivity_a1 = 6.608
     erosivity_a2 = 0.5
@@ -90,8 +90,8 @@
 &sediment
     porosity = 0.8, 0.6, 0.4, 0.2
 
-    !! Current DataInputModule namelist variable name:
-    sedimentInitialMass = 0.02, 0.02, 0.32, 0.32, 0.32
+    !! Initial fine sediment mass by size class [kg/m2] (namelist variable initial_mass)
+    initial_mass = 0.02, 0.02, 0.32, 0.32, 0.32
 
     fractional_composition_distribution = 0.5, 0.5
     default_spm_size_distribution = 50, 30, 10, 7, 3

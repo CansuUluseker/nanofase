@@ -38,6 +38,8 @@ contains
         !! a pool relaxes towards its equilibrium mass as exp(-k*dt) (rate-limited,
         !! first-order sorption/desorption); k = 0 means instantaneous equilibrium.
         !! Mass is conserved per species and form; other phases are not touched.
+        !! With no water (a dry soil or bed layer) nothing can be dissolved: the
+        !! equilibrium is then all on the sorbent and the interface.
         real(dp), intent(inout) :: pfas(:,:,:)
         real(dp), intent(in)    :: dt
         real(dp), intent(in)    :: volume_water     !! Water volume [m3]
@@ -50,7 +52,6 @@ contains
         integer :: i, f, ns
         real(dp) :: cap_s, cap_aw, denom, total, eq_s, eq_aw, m_s, m_aw
 
-        if (volume_water <= C%epsilon) return
         if (sorbed_phase < 1 .or. sorbed_phase > size(pfas,3) .or. sorbed_phase == PFAS_AQ &
             .or. sorbed_phase == PFAS_AWI) return
 
@@ -58,7 +59,8 @@ contains
         do i = 1, ns
             cap_s = max(0.0_dp, kd(i)) * max(0.0_dp, mass_sorbent)
             cap_aw = max(0.0_dp, kia(i)) * max(0.0_dp, awi_area)
-            denom = volume_water + cap_s + cap_aw
+            denom = max(0.0_dp, volume_water) + cap_s + cap_aw
+            if (denom <= C%epsilon) cycle     ! No water, sorbent or interface: nothing to partition into
             do f = 1, size(pfas,2)
                 total = max(0.0_dp, pfas(i,f,PFAS_AQ)) + max(0.0_dp, pfas(i,f,sorbed_phase)) &
                         + max(0.0_dp, pfas(i,f,PFAS_AWI))

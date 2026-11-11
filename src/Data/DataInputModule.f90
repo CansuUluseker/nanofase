@@ -1105,74 +1105,74 @@ contains
         !-----------------------------------------
         if (me%nc%hasVariable('emissions_atmospheric_drydepo_pristine')) then
             var = me%nc%getVariable('emissions_atmospheric_drydepo_pristine')
-            allocate(A3(nx,ny,nt)); call var%getData(A3); A3 = zeroFillValue(A3)
+            allocate(A3(nx,ny,nt)); call var%getData(A3); call checkTimeWindow(size(A3,3)); A3 = zeroFillValue(A3)
             do n = 1, nsizes
                 me%emissionsAtmosphericDryDepoContaminant(:,:,:,n,f_pris,PFAS_AQ) = &
-                    A3 * me%defaultDistributionContaminant(n)
+                    A3(:,:,1:nt) * me%defaultDistributionContaminant(n)
             end do
             deallocate(A3)
         end if
 
         if (me%nc%hasVariable('emissions_atmospheric_drydepo_matrixembedded')) then
             var = me%nc%getVariable('emissions_atmospheric_drydepo_matrixembedded')
-            allocate(A3(nx,ny,nt)); call var%getData(A3); A3 = zeroFillValue(A3)
+            allocate(A3(nx,ny,nt)); call var%getData(A3); call checkTimeWindow(size(A3,3)); A3 = zeroFillValue(A3)
             do n = 1, nsizes
                 me%emissionsAtmosphericDryDepoContaminant(:,:,:,n,f_mat,PFAS_AQ) = &
-                    A3 * me%defaultDistributionContaminant(n)
+                    A3(:,:,1:nt) * me%defaultDistributionContaminant(n)
             end do
             deallocate(A3)
         end if
 
         if (me%nc%hasVariable('emissions_atmospheric_drydepo_transformed')) then
             var = me%nc%getVariable('emissions_atmospheric_drydepo_transformed')
-            allocate(A3(nx,ny,nt)); call var%getData(A3); A3 = zeroFillValue(A3)
+            allocate(A3(nx,ny,nt)); call var%getData(A3); call checkTimeWindow(size(A3,3)); A3 = zeroFillValue(A3)
             do n = 1, nsizes
                 me%emissionsAtmosphericDryDepoContaminant(:,:,:,n,f_tra,PFAS_AQ) = &
-                    A3 * me%defaultDistributionContaminant(n)
+                    A3(:,:,1:nt) * me%defaultDistributionContaminant(n)
             end do
             deallocate(A3)
         end if
 
         if (me%nc%hasVariable('emissions_atmospheric_wetdepo_pristine')) then
             var = me%nc%getVariable('emissions_atmospheric_wetdepo_pristine')
-            allocate(A3(nx,ny,nt)); call var%getData(A3); A3 = zeroFillValue(A3)
+            allocate(A3(nx,ny,nt)); call var%getData(A3); call checkTimeWindow(size(A3,3)); A3 = zeroFillValue(A3)
             do n = 1, nsizes
                 me%emissionsAtmosphericWetDepoContaminant(:,:,:,n,f_pris,PFAS_AQ) = &
-                    A3 * me%defaultDistributionContaminant(n)
+                    A3(:,:,1:nt) * me%defaultDistributionContaminant(n)
             end do
             deallocate(A3)
         end if
 
         if (me%nc%hasVariable('emissions_atmospheric_wetdepo_matrixembedded')) then
             var = me%nc%getVariable('emissions_atmospheric_wetdepo_matrixembedded')
-            allocate(A3(nx,ny,nt)); call var%getData(A3); A3 = zeroFillValue(A3)
+            allocate(A3(nx,ny,nt)); call var%getData(A3); call checkTimeWindow(size(A3,3)); A3 = zeroFillValue(A3)
             do n = 1, nsizes
                 me%emissionsAtmosphericWetDepoContaminant(:,:,:,n,f_mat,PFAS_AQ) = &
-                    A3 * me%defaultDistributionContaminant(n)
+                    A3(:,:,1:nt) * me%defaultDistributionContaminant(n)
             end do
             deallocate(A3)
         end if
 
         if (me%nc%hasVariable('emissions_atmospheric_wetdepo_transformed')) then
             var = me%nc%getVariable('emissions_atmospheric_wetdepo_transformed')
-            allocate(A3(nx,ny,nt)); call var%getData(A3); A3 = zeroFillValue(A3)
+            allocate(A3(nx,ny,nt)); call var%getData(A3); call checkTimeWindow(size(A3,3)); A3 = zeroFillValue(A3)
             do n = 1, nsizes
                 me%emissionsAtmosphericWetDepoContaminant(:,:,:,n,f_tra,PFAS_AQ) = &
-                    A3 * me%defaultDistributionContaminant(n)
+                    A3(:,:,1:nt) * me%defaultDistributionContaminant(n)
             end do
             deallocate(A3)
         end if
 
         if (me%nc%hasVariable('emissions_atmospheric_drydepo_dissolved')) then
             var = me%nc%getVariable('emissions_atmospheric_drydepo_dissolved')
-            allocate(A3(nx,ny,nt)); call var%getData(A3); A3 = zeroFillValue(A3)
+            allocate(A3(nx,ny,nt)); call var%getData(A3); call checkTimeWindow(size(A3,3)); A3 = zeroFillValue(A3)
             me%emissionsAtmosphericDryDepoDissolvedContaminant = A3
             deallocate(A3)
         end if
 
         if (me%nc%hasVariable('emissions_atmospheric_wetdepo_dissolved')) then
             var = me%nc%getVariable('emissions_atmospheric_wetdepo_dissolved')
-            allocate(A3(nx,ny,nt)); call var%getData(A3); A3 = zeroFillValue(A3)
+            allocate(A3(nx,ny,nt)); call var%getData(A3); call checkTimeWindow(size(A3,3)); A3 = zeroFillValue(A3)
             me%emissionsAtmosphericWetDepoDissolvedContaminant = A3
             deallocate(A3)
         end if
@@ -1212,20 +1212,20 @@ contains
 
             if (me%nc%hasVariable('emissions_point_water_pristine')) then
                 var = me%nc%getVariable('emissions_point_water_pristine')
-                allocate(A4(nx,ny,nt,np)); call var%getData(A4); A4 = zeroFillValue(A4)   ! (x,y,t,p)
+                allocate(A4(nx,ny,nt,np)); call var%getData(A4); call checkTimeWindow(size(A4,3)); A4 = zeroFillValue(A4)   ! (x,y,t,p)
                 do n = 1, nsizes
                     me%emissionsPointWaterContaminant(:,:,:,1:np,n,f_pris,PFAS_AQ) = &
-                        A4 * me%defaultDistributionContaminant(n)
+                        A4(:,:,1:nt,:) * me%defaultDistributionContaminant(n)
                 end do
                 deallocate(A4)
             end if
 
             if (me%nc%hasVariable('emissions_point_water_matrixembedded')) then
                 var = me%nc%getVariable('emissions_point_water_matrixembedded')
-                allocate(A4(nx,ny,nt,np)); call var%getData(A4); A4 = zeroFillValue(A4)   ! (x,y,t,p)
+                allocate(A4(nx,ny,nt,np)); call var%getData(A4); call checkTimeWindow(size(A4,3)); A4 = zeroFillValue(A4)   ! (x,y,t,p)
                 do n = 1, nsizes
                     me%emissionsPointWaterContaminant(:,:,:,1:np,n,f_mat,PFAS_AQ) = &
-                        A4 * me%defaultDistributionContaminant(n)
+                        A4(:,:,1:nt,:) * me%defaultDistributionContaminant(n)
                 end do
                 deallocate(A4)
             end if
@@ -1233,10 +1233,10 @@ contains
             ! Optional: only if present in file
             if (me%nc%hasVariable('emissions_point_water_transformed')) then
                 var = me%nc%getVariable('emissions_point_water_transformed')
-                allocate(A4(nx,ny,nt,np)); call var%getData(A4); A4 = zeroFillValue(A4)   ! (x,y,t,p)
+                allocate(A4(nx,ny,nt,np)); call var%getData(A4); call checkTimeWindow(size(A4,3)); A4 = zeroFillValue(A4)   ! (x,y,t,p)
                 do n = 1, nsizes
                     me%emissionsPointWaterContaminant(:,:,:,1:np,n,f_tra,PFAS_AQ) = &
-                        A4 * me%defaultDistributionContaminant(n)
+                        A4(:,:,1:nt,:) * me%defaultDistributionContaminant(n)
                 end do
                 deallocate(A4)
             end if
@@ -1345,6 +1345,17 @@ contains
         call me%calculateNPointSources(me%maxPointSources)
 
       contains
+
+        !> getData reallocates its buffer to the variable's full time length, which may be
+        !! longer than the run (only the first nt steps are used) but must not be shorter.
+        subroutine checkTimeWindow(nFile)
+            integer, intent(in) :: nFile
+            if (nFile < nt) then
+                call ERROR_HANDLER%trigger(error=ErrorInstance(code=201, message="Input variable '" // &
+                    trim(var%getName()) // "' has " // trim(str(nFile)) // " time steps, fewer than the " // &
+                    trim(str(nt)) // " in the run"))
+            end if
+        end subroutine
 
         !> Read an optional (x,y) PFAS property map. Left unallocated if absent.
         subroutine readPfasMap2D(name, map)

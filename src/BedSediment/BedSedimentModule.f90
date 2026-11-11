@@ -149,6 +149,29 @@ contains
         ! (burial is a cumulative inventory)
         me%A_pfas(2,2) = 1.0_dp
         me%A_pfas(n,n) = 1.0_dp
+        ! Every source column must sum to exactly 1, or PFAS is created or lost. The
+        ! sediment bookkeeping drops transfers below its isZero threshold (e.g. a deposit
+        ! of 1e-21 kg/m2 SPM gives an all-zero deposit column) even when the PFAS on
+        ! that sediment is not negligible, and leaves rounding residues. Put any
+        ! unassigned share of the deposit in the top layer, and any unassigned share of
+        ! a layer back in that layer; rescale a column that over-assigns.
+        call close_column(1, 3)
+        do LL = 3, C%nSedimentLayers + 2
+            call close_column(LL, LL)
+        end do
+
+    contains
+
+        subroutine close_column(col, sink)
+            integer, intent(in) :: col, sink
+            real(dp) :: colsum
+            colsum = sum(me%A_pfas(:,col))
+            if (colsum < 1.0_dp) then
+                me%A_pfas(sink,col) = me%A_pfas(sink,col) + (1.0_dp - colsum)
+            else if (colsum > 1.0_dp) then
+                me%A_pfas(:,col) = me%A_pfas(:,col) / colsum
+            end if
+        end subroutine
     end subroutine
 
     !> **Function purpose**                                         <br>

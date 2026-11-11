@@ -33,6 +33,7 @@ module AbstractBedSedimentModule
         integer                         :: nfComp                               !! number of fractional composition terms for sediment
         ! Contaminants
         type(Contaminant), allocatable :: m_contaminant(:)                     !! Contaminant objects for deposition, resuspension, layers 1 to N, and burial
+        real(dp) :: pfasArea = 0.0_dp                                           !! Bed area the per-area PFAS pools currently refer to [m2]
         real(dp), allocatable :: A_pfas(:,:)                                    !! PFAS transfer matrix (layers + 3)^2, delta_sed aggregated over size classes by sediment mass
     contains
         procedure(createBedSediment), deferred :: create            ! constructor method
@@ -68,6 +69,7 @@ module AbstractBedSedimentModule
         procedure :: get_C_pfas_layer_aqueous
         procedure :: get_C_pfas_layer_sorbed_byMass
         procedure :: update_pfas => update_pfas_bed
+        procedure :: set_area => set_area_bed
         procedure :: finalise => finaliseBedSediment
     end type
 
@@ -964,6 +966,30 @@ module AbstractBedSedimentModule
         if (allocated(me%delta_sed_csr)) deallocate(me%delta_sed_csr)
         if (allocated(me%A_pfas)) deallocate(me%A_pfas)
     end subroutine
+
+    !> Keep the bed's PFAS mass [kg] unchanged when the bed area changes. The PFAS
+    !! pools are per unit area [kg/m2] and the water body converts them to kg with its
+    !! bed area, which for rivers is recomputed from the flow every time step (width
+    !! = f(Q)); without this, widening or narrowing the channel would create or
+    !! destroy PFAS. The pools are rescaled by old/new area. A zero area (dry channel)
+    !! leaves them as they are, and they are rescaled from the last wetted area when
+    !! the channel wets up again. Call whenever the water body sets its bed area.
+    subroutine set_area_bed(me, newArea)
+        class(AbstractBedSediment), intent(inout) :: me
+        real(dp), intent(in) :: newArea     !! New bed area [m2]
+        real(dp) :: factor
+        integer :: i
+        if (newArea <= C%epsilon) return
+        if (me%pfasArea > C%epsilon .and. abs(newArea - me%pfasArea) > 0.0_dp &
+            .and. allocated(me%m_contaminant)) then
+            factor = me%pfasArea / newArea
+            do i = 1, size(me%m_contaminant)
+                if (allocated(me%m_contaminant(i)%c)) me%m_contaminant(i)%c = me%m_contaminant(i)%c * factor
+                me%m_contaminant(i)%m_dissolved = me%m_contaminant(i)%m_dissolved * factor
+            end do
+        end if
+        me%pfasArea = newArea
+    end subroutine set_area_bed
 
     !> PFAS processes within the bed over one time step, after the sediment
     !! transfers of the step: (1) partitioning between porewater (PFAS_AQ) and bed

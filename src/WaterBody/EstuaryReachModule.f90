@@ -368,6 +368,7 @@ contains
         me%depth = me%calculateDepth(tHours)
         me%xsArea = me%depth * me%width
         me%bedArea = me%width * me%length * me%f_m
+        if (allocated(me%bedSediment)) call me%bedSediment%set_area(me%bedArea)
         me%surfaceArea = me%bedArea
         me%volume = me%depth * me%width * me%length * me%f_m
     end subroutine

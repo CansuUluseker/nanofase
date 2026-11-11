@@ -11,7 +11,7 @@ module RiverReachModule
     use ReactorModule
     use BiotaWaterModule
     use ContaminantModule
-    use PFASConstantsModule, only: PFAS_AQ
+    use PFASConstantsModule, only: PFAS_AQ, PFAS_SPM
     implicit none
 
     !> The RiverReach type represents a segment of river within a grid cell
@@ -360,6 +360,14 @@ contains
                 call me%m_contaminant%deposition( &
                     divideCheckZero(sum(dj_spm_deposit), sum(m_spm_preupdate + dj_spm_in)), &
                     dj_contaminant_deposit)
+                ! The outflow and the deposit are both taken from the SPM-sorbed pool as it
+                ! was at the start of the displacement. When settling is fast (k_settle*dt
+                ! >= 1, e.g. shallow reaches) the deposit is the whole pool, and outflow +
+                ! deposit exceed it: the store went negative and clamp_negative then created
+                ! mass. Cap the deposit at what the inflow and outflow leave in the pool.
+                dj_contaminant_deposit%c(:,:,PFAS_SPM) = min(dj_contaminant_deposit%c(:,:,PFAS_SPM), &
+                    max(0.0_dp, me%m_contaminant%c(:,:,PFAS_SPM) + dj_contaminant_in%c(:,:,PFAS_SPM) &
+                        - dj_contaminant_outflow%c(:,:,PFAS_SPM)))
 
                 ! ------------------------------------------------------------------
                 ! Bed coupling: one matrix per displacement. getmatrix turns this
@@ -402,7 +410,9 @@ contains
 
                 ! ------------------------------------------------------------------
                 ! MASS-BALANCE CHECK (per displacement)
-                ! lhs = inflows + resus − deposits − outflow  vs  Δstorage (water + bed)
+                ! lhs = inflows − outflow  vs  Δstorage (water + bed). Deposition and
+                ! resuspension move mass between water and bed, both inside the storage,
+                ! so they cancel and are reported for information only.
                 ! The bed pools are per-area [kg/m2], so scale them by bedArea to
                 ! compare against absolute water masses. Fails loudly (non-critical
                 ! error) when the discrepancy exceeds tolerance.
@@ -426,11 +436,13 @@ contains
                     mb_dep    = total_mass(dj_contaminant_deposit)
                     mb_out    = total_mass(dj_contaminant_outflow)
 
-                    mb_delta   = mb_in + mb_resus - mb_dep - mb_out
+                    mb_delta   = mb_in - mb_out
                     mb_storage = (total_mass(w_after) + total_mass(bed_after) * me%bedArea) - &
                                  (total_mass(w_before) + total_mass(bed_before) * me%bedArea)
 
-                    if (abs(mb_delta - mb_storage) > max(1.0e-9_dp, 1.0e-6_dp * abs(mb_storage))) then
+                    ! Tolerance relative to the mass in play, so small reaches are checked too
+                    if (abs(mb_delta - mb_storage) > 1.0e-9_dp * max(abs(mb_in), abs(mb_out), &
+                        total_mass(w_before) + total_mass(bed_before) * me%bedArea) + 1.0e-15_dp) then
                         call rslt%addError(ErrorInstance(code=902, isCritical=.false., message= &
                             "Contaminant mass balance failure in " // trim(me%ref) // &
                             " (t=" // trim(str(t)) // ", disp=" // trim(str(d)) // "): " // &
@@ -488,6 +500,8 @@ contains
         me%depth = me%calculateDepth(me%width, me%slope, me%Q_in_total/C%timeStep, t)
         me%xsArea = me%depth*me%width
         me%bedArea = me%width*me%length*me%f_m
+        ! The bed's PFAS pools are per area: keep their mass [kg] as the width changes
+        if (allocated(me%bedSediment)) call me%bedSediment%set_area(me%bedArea)
         me%surfaceArea = me%bedArea                       ! For river reaches, set surface area equal to bed area [m2]
         me%volume = me%depth*me%width*me%length*me%f_m
         me%velocity = me%calculateVelocity(me%depth, me%Q_in_total/C%timeStep, me%width)

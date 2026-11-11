@@ -17,6 +17,15 @@ module EnvironmentModule
     !! environmental compartments, triggering their creation, simulation
     !! and passing data between them
     type, public, extends(AbstractEnvironment) :: Environment
+        ! PFAS catchment mass-balance diagnostic (see massBalancePfas)
+        logical  :: mbInitialised = .false.         !! Has the initial PFAS storage been recorded?
+        integer  :: iouMassBalance = -1             !! Unit of the pfas_mass_balance CSV file
+        real(dp) :: mbStoragePrev = 0.0_dp          !! Total PFAS storage at the end of the previous step [kg]
+        real(dp) :: mbStorageInitial = 0.0_dp       !! Total PFAS storage before the first step [kg]
+        real(dp) :: mbCumInput = 0.0_dp             !! Cumulative PFAS input [kg]
+        real(dp) :: mbCumExport = 0.0_dp            !! Cumulative PFAS export through domain outlets [kg]
+        real(dp) :: mbCumLoss = 0.0_dp              !! Cumulative PFAS losses (foam, atmosphere, leaching, unrouted) [kg]
+        real(dp) :: mbCumResidual = 0.0_dp          !! Cumulative mass-balance residual [kg]
       contains
         procedure :: create => createEnvironment
         procedure :: update => updateEnvironment
@@ -31,6 +40,9 @@ module EnvironmentModule
         procedure :: get_C_contaminant_sediment => get_C_contaminant_sedimentEnvironment
         procedure :: getBedSedimentArea => getBedSedimentAreaEnvironment
         procedure :: get_m_sediment_byLayer => get_m_sediment_byLayerEnvironment
+        ! PFAS mass balance
+        procedure :: pfasStorage => pfasStorageEnvironment
+        procedure :: massBalancePfas => massBalancePfasEnvironment
     end type
 
   contains
@@ -171,6 +183,12 @@ module EnvironmentModule
                           " (time step #" // trim(str(tInBatch)) // ")...")
         end if
         
+        ! Record the PFAS storage before the first step, for the mass balance
+        if (.not. me%mbInitialised .and. .not. C%ignoreContaminant) then
+            me%mbStoragePrev = sum(me%pfasStorage())
+            me%mbStorageInitial = me%mbStoragePrev
+        end if
+
         !!$omp parallel do private(y,x)
         do y = 1, DATASET%gridShape(2)
             do x = 1, DATASET%gridShape(1)
@@ -186,6 +204,9 @@ module EnvironmentModule
         do i = 1, me%nWaterbodies
            call me%updateReach(t, me%routedReaches(i), isWarmUp)
         end do
+
+        ! Catchment-wide PFAS mass balance for this time step
+        if (.not. C%ignoreContaminant) call me%massBalancePfas(t, tInBatch, isWarmUp)
         
         ! Finalise the routing by setting outflows to temporary outflows that were stored
         ! to avoid routing using the wrong timestep's outflow as an inflow.
@@ -597,4 +618,164 @@ module EnvironmentModule
         end do
     end function
     
+    !> Total PFAS mass held in the model, by store [kg]: (1) water bodies, all phases;
+    !! (2) bed sediment, all pools (deposit inlet, resuspension pool, layers, burial),
+    !! converted from per area by the bed area; (3) soil, all layers and phases;
+    !! (4) the groundwater reservoirs below the soil.
+    function pfasStorageEnvironment(me) result(storage)
+        class(Environment), target :: me
+        real(dp) :: storage(4)
+        type(Result0D) :: r0
+        integer :: i, x, y, p, l
+
+        storage = 0.0_dp
+        do i = 1, me%nWaterbodies
+            associate (reach => me%routedReaches(i)%item)
+                if (allocated(reach%m_contaminant%c)) storage(1) = storage(1) + sum(reach%m_contaminant%c)
+                if (allocated(reach%bedSediment)) then
+                    r0 = reach%bedSediment%get_m_contaminant_total()
+                    if (allocated(r0%data)) then
+                        select type (bed => r0%data)
+                            type is (Contaminant)
+                                if (allocated(bed%c)) storage(2) = storage(2) + sum(bed%c) * reach%bedArea
+                        end select
+                    end if
+                end if
+            end associate
+        end do
+        do y = 1, DATASET%gridShape(2)
+            do x = 1, DATASET%gridShape(1)
+                if (.not. DATASET%simulationMask(x,y)) cycle
+                if (.not. associated(me%colGridCells(x,y)%item)) cycle
+                associate (cell => me%colGridCells(x,y)%item)
+                    if (cell%isEmpty .or. .not. allocated(cell%colSoilProfiles)) cycle
+                    do p = 1, min(cell%nSoilProfiles, size(cell%colSoilProfiles))
+                        if (.not. allocated(cell%colSoilProfiles(p)%item)) cycle
+                        associate (sp => cell%colSoilProfiles(p)%item)
+                            if (.not. allocated(sp%colSoilLayers)) cycle
+                            do l = 1, size(sp%colSoilLayers)
+                                if (.not. allocated(sp%colSoilLayers(l)%item)) cycle
+                                if (allocated(sp%colSoilLayers(l)%item%m_contaminant%c)) &
+                                    storage(3) = storage(3) + sum(sp%colSoilLayers(l)%item%m_contaminant%c)
+                            end do
+                            if (allocated(sp%m_contaminant_groundwater%c)) &
+                                storage(4) = storage(4) + sum(sp%m_contaminant_groundwater%c)
+                        end associate
+                    end do
+                end associate
+            end do
+        end do
+    end function
+
+    !> Catchment-wide PFAS mass balance for time step t, written to
+    !! <output_path>/pfas_mass_balance<hash>.csv:
+    !!   residual = dStorage - inputs + export + losses
+    !! where dStorage is the change in total storage (pfasStorage) over the step;
+    !! inputs are point sources and diffuse/atmospheric sources to water bodies and
+    !! soils; export is the outflow of reaches leaving the domain; losses are foam and
+    !! atmosphere exchange, leachate leaving the soil where there is no groundwater
+    !! reservoir, and land export from cells without water bodies. A residual that is
+    !! not ~0 means mass is created or lost somewhere. Transformation with yields
+    !! other than 1 also shows up as a residual, by design.
+    subroutine massBalancePfasEnvironment(me, t, tInBatch, isWarmUp)
+        class(Environment), target :: me
+        integer, intent(in) :: t, tInBatch
+        logical, intent(in) :: isWarmUp
+        real(dp) :: storage(4), s_total, d_storage, in_point, in_water, in_soil, export, &
+                    loss_foam, loss_air, loss_leach, loss_unrouted, inputs, losses, residual, tol, &
+                    f_eroded, f_runoff, f_leached, f_baseflow
+        integer :: i, x, y, p
+        type(datetime) :: currentDate
+
+        storage = me%pfasStorage()
+        s_total = sum(storage)
+        d_storage = s_total - me%mbStoragePrev
+        in_point = 0.0_dp; in_water = 0.0_dp; in_soil = 0.0_dp; export = 0.0_dp
+        loss_foam = 0.0_dp; loss_air = 0.0_dp; loss_leach = 0.0_dp; loss_unrouted = 0.0_dp
+        f_eroded = 0.0_dp; f_runoff = 0.0_dp; f_leached = 0.0_dp; f_baseflow = 0.0_dp
+
+        do i = 1, me%nWaterbodies
+            associate (reach => me%routedReaches(i)%item)
+                in_point = in_point + total_of(reach%j_contaminant_pointSources)
+                in_water = in_water + total_of(reach%j_contaminant_diffuseSources)
+                ! Flux holders: outflow positive, foam/atmosphere negative (loss)
+                if (reach%isDomainOutflow) export = export + total_of(reach%j_contaminant_outflow)
+                loss_foam = loss_foam - total_of(reach%j_contaminant_foam)
+                loss_air = loss_air - total_of(reach%j_contaminant_atmosphere)
+            end associate
+        end do
+        do y = 1, DATASET%gridShape(2)
+            do x = 1, DATASET%gridShape(1)
+                if (.not. DATASET%simulationMask(x,y)) cycle
+                if (.not. associated(me%colGridCells(x,y)%item)) cycle
+                associate (cell => me%colGridCells(x,y)%item)
+                    if (cell%isEmpty .or. .not. allocated(cell%colSoilProfiles)) cycle
+                    do p = 1, min(cell%nSoilProfiles, size(cell%colSoilProfiles))
+                        if (.not. allocated(cell%colSoilProfiles(p)%item)) cycle
+                        associate (sp => cell%colSoilProfiles(p)%item)
+                            in_soil = in_soil + total_of(sp%m_contaminant_in)
+                            ! Internal land fluxes, for information (they cancel in the balance)
+                            f_eroded = f_eroded + total_of(sp%m_contaminant_eroded)
+                            f_runoff = f_runoff + total_of(sp%m_contaminant_surfaceRunoff)
+                            f_leached = f_leached + total_of(sp%m_contaminant_buried)
+                            f_baseflow = f_baseflow + total_of(sp%m_contaminant_baseflow)
+                            if (sp%gwResidenceTime <= 0.0_dp) loss_leach = loss_leach + total_of(sp%m_contaminant_buried)
+                            if (cell%nReaches == 0) loss_unrouted = loss_unrouted + total_of(sp%m_contaminant_eroded) &
+                                + total_of(sp%m_contaminant_surfaceRunoff) + total_of(sp%m_contaminant_baseflow)
+                        end associate
+                    end do
+                end associate
+            end do
+        end do
+
+        inputs = in_point + in_water + in_soil
+        losses = loss_foam + loss_air + loss_leach + loss_unrouted
+        residual = d_storage - inputs + export + losses
+        me%mbCumInput = me%mbCumInput + inputs
+        me%mbCumExport = me%mbCumExport + export
+        me%mbCumLoss = me%mbCumLoss + losses
+        me%mbCumResidual = me%mbCumResidual + residual
+        me%mbStoragePrev = s_total
+
+        if (.not. me%mbInitialised) then
+            open(newunit=me%iouMassBalance, file=trim(C%outputPath) // 'pfas_mass_balance' // trim(C%outputHash) // '.csv', &
+                 status='replace', action='write')
+            write(me%iouMassBalance, '(a)') "# P-FASE catchment PFAS mass balance [kg]. residual = d_storage - " // &
+                "input_total + export_outlets + loss_total; ~0 means mass is conserved. Storages are end-of-step totals."
+            write(me%iouMassBalance, '(a)') "# The last four columns are internal land fluxes on the step, for information: " // &
+                "PFAS eroded from soil (gross, before the part reaches can't carry is returned), dissolved in overland " // &
+                "runoff, leached below the soil, and discharged from groundwater as baseflow."
+            write(me%iouMassBalance, '(a)') "t,date,warm_up,storage_water,storage_bed,storage_soil,storage_groundwater," // &
+                "storage_total,input_point,input_water_diffuse,input_soil,input_total,export_outlets,loss_foam," // &
+                "loss_atmosphere,loss_leaching,loss_unrouted_land,loss_total,d_storage,residual,cum_input,cum_export," // &
+                "cum_loss,cum_residual,cum_residual_relative,soil_eroded_gross,soil_runoff_dissolved," // &
+                "soil_leached,groundwater_baseflow"
+            me%mbInitialised = .true.
+        end if
+        currentDate = C%startDate + timedelta(t-1)
+        write(me%iouMassBalance, '(i0,",",a,",",l1,26(",",es23.15e3))') tInBatch, currentDate%strftime('%Y-%m-%d'), &
+            isWarmUp, storage(1), storage(2), storage(3), storage(4), s_total, in_point, in_water, in_soil, inputs, &
+            export, loss_foam, loss_air, loss_leach, loss_unrouted, losses, d_storage, residual, me%mbCumInput, &
+            me%mbCumExport, me%mbCumLoss, me%mbCumResidual, &
+            me%mbCumResidual / max(C%epsilon, me%mbCumInput + me%mbStorageInitial), &
+            f_eroded, f_runoff, f_leached, f_baseflow
+        flush(me%iouMassBalance)
+
+        ! Flag a step that does not close, relative to the mass in play
+        tol = 1.0e-9_dp * max(abs(s_total), abs(inputs), abs(export), abs(losses), abs(me%mbStorageInitial)) + 1.0e-15_dp
+        if (abs(residual) > tol) then
+            call LOGR%add("WARNING: PFAS mass balance does not close on time step " // trim(str(tInBatch)) // &
+                ": residual = " // trim(str(residual)) // " kg (see pfas_mass_balance.csv)")
+        end if
+
+    contains
+
+        function total_of(cont) result(m)
+            type(Contaminant), intent(in) :: cont
+            real(dp) :: m
+            m = 0.0_dp
+            if (allocated(cont%c)) m = sum(cont%c)
+        end function
+    end subroutine
+
 end module
